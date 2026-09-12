@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="deck_background">#FF090C12</color>
+    <color name="deck_accent">#FF5B9DFF</color>
+    <color name="ic_launcher_background">#FF0E1420</color>
+</resources>

@@ -1,0 +1,10 @@
+# Normalise text to LF in the repository.
+* text=auto
+
+# The Gradle wrapper script is run by /bin/sh; a CRLF line ending breaks it on
+# Linux, macOS and CI with "/bin/sh^M: bad interpreter".
+gradlew text eol=lf
+*.bat text eol=crlf
+
+*.jar binary
+*.png binary

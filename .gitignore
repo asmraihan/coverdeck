@@ -1,0 +1,24 @@
+# Build output. Unanchored so app/build is caught too, not just the root one:
+# that directory holds the 59 MB debug APK.
+build/
+*.apk
+*.aab
+/captures
+
+# Gradle and Kotlin caches
+.gradle/
+.kotlin/
+.externalNativeBuild
+.cxx
+
+# Machine-local: holds this computer's SDK path
+local.properties
+
+# IDE
+*.iml
+.idea/
+.DS_Store
+
+# Signing material must never be committed
+*.jks
+*.keystore

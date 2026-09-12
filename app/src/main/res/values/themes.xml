@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Deliberately parented on the platform dark theme rather than AppCompat: the whole
+      UI is Compose, and dragging in the Material XML theme stack would only add weight.
+    -->
+    <style name="Theme.CoverDeck" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/deck_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>
