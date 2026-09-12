@@ -72,7 +72,7 @@ private fun HomeScreen(model: DeckViewModel) {
     val cover by model.coverPanel.collectAsState()
     val main by model.mainPanel.collectAsState()
     val notice by model.notice.collectAsState()
-    val overlayOn by model.overlayRunning.collectAsState()
+    val stripOn by model.stripEnabled.collectAsState()
 
     val panel = if (target == Target.Cover) cover else main
     val rotation by model.rotationState(panel.displayId).collectAsState()
@@ -123,12 +123,16 @@ private fun HomeScreen(model: DeckViewModel) {
                 DeckTile(
                     icon = Icons.Rounded.ScreenRotation,
                     title = "Rotation",
-                    status = if (rotation.frozen) {
-                        "Locked ${RotationController.Mode.forRotation(rotation.currentRotation).label}"
-                    } else {
-                        "Auto"
+                    // Auto on the cover freezes rotation continuously, so it must be
+                    // checked before "frozen", or it would read as a fixed lock.
+                    status = when {
+                        rotation.autoRotate -> "Auto"
+                        rotation.frozen ->
+                            "Locked ${RotationController.Mode.forRotation(rotation.currentRotation).label}"
+                        RotationController.isCover(panel.displayId) -> "System"
+                        else -> "Auto"
                     },
-                    active = rotation.frozen,
+                    active = rotation.frozen || rotation.autoRotate,
                     enabled = ready,
                     onClick = { model.navigate(DeckRoute.Rotation) },
                 )
@@ -175,10 +179,10 @@ private fun HomeScreen(model: DeckViewModel) {
                 DeckTile(
                     icon = Icons.Rounded.SwipeUp,
                     title = "Gesture strip",
-                    status = if (overlayOn) "Running" else "Off",
-                    active = overlayOn,
+                    status = if (stripOn) "On" else "Off",
+                    active = stripOn,
                     enabled = ready,
-                    onClick = { model.toggleOverlay() },
+                    onClick = { model.toggleStrip() },
                 )
             }
             item {

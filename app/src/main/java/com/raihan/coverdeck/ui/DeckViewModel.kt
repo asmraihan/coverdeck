@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.core.Panel
+import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.DensityController
 import com.raihan.coverdeck.feature.MirrorController
 import com.raihan.coverdeck.feature.RecentsController
@@ -45,8 +46,8 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     private val _mainPanel = MutableStateFlow(Displays.main(context))
     val mainPanel: StateFlow<Panel> = _mainPanel.asStateFlow()
 
-    private val _overlayRunning = MutableStateFlow(CoverDeckService.isRunning)
-    val overlayRunning: StateFlow<Boolean> = _overlayRunning.asStateFlow()
+    /** The strip is a persisted switch now, independent of whether the service is up. */
+    val stripEnabled: StateFlow<Boolean> = CoverDeckService.stripEnabled
 
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
@@ -90,6 +91,7 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         if (strandedDpi != null) {
             _notice.value = "Reverted an unconfirmed ${strandedDpi} dpi change on the cover screen."
         }
+        resumePersistentFeatures()
         refreshDisplayState()
     }
 
@@ -98,7 +100,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         _mainPanel.value = Displays.main(context)
         RotationController.refresh(targetDisplayId)
         density.refresh(targetDisplayId)
-        _overlayRunning.value = CoverDeckService.isRunning
     }
 
     fun applyRotation(mode: RotationController.Mode, forceAppsToObey: Boolean) {
@@ -109,18 +110,33 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { recents.refresh() }
     }
 
-    fun toggleOverlay() {
-        if (CoverDeckService.isRunning) {
-            CoverDeckService.stop(context)
-            _overlayRunning.value = false
+    fun toggleStrip() {
+        if (stripEnabled.value) {
+            if (CoverDeckService.isRunning) {
+                CoverDeckService.send(context, CoverDeckService.ACTION_STRIP_OFF)
+            }
         } else {
             if (!Settings.canDrawOverlays(context)) {
                 _notice.value = "Grant \"Display over other apps\" first."
                 return
             }
-            CoverDeckService.start(context)
-            _overlayRunning.value = true
+            CoverDeckService.send(context, CoverDeckService.ACTION_STRIP_ON)
         }
+    }
+
+    /**
+     * Brings the service back when a persisted feature (auto-rotate, strip) is on but
+     * the process was killed. Called from the foreground activity, where starting a
+     * foreground service is always allowed.
+     */
+    fun resumePersistentFeatures() {
+        if (CoverDeckService.isRunning) return
+        val action = when {
+            AutoRotate.enabled.value -> CoverDeckService.ACTION_AUTO_ROTATE_ON
+            stripEnabled.value && Settings.canDrawOverlays(context) -> CoverDeckService.ACTION_STRIP_ON
+            else -> return
+        }
+        runCatching { CoverDeckService.send(context, action) }
     }
 
     fun hasOverlayPermission(): Boolean = Settings.canDrawOverlays(context)
@@ -136,7 +152,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     fun resetEverything() {
         mirror.stop(alsoReleaseDeviceState = true)
         CoverDeckService.stop(context)
-        _overlayRunning.value = false
 
         val undone = mutableListOf<String>()
         val panels = listOf(_coverPanel.value, _mainPanel.value).distinctBy { it.displayId }

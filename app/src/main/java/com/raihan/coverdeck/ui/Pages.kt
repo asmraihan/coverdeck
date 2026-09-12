@@ -29,15 +29,19 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.DensityController
 import com.raihan.coverdeck.feature.MirrorController
 import com.raihan.coverdeck.feature.RotationController
@@ -57,8 +61,15 @@ fun RotationPage(model: DeckViewModel) {
     val main by model.mainPanel.collectAsState()
     val panel = if (target == Target.Cover) cover else main
     val state by model.rotationState(panel.displayId).collectAsState()
+    val isCover = RotationController.isCover(panel.displayId)
+    val modes = RotationController.modesFor(panel.displayId)
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
         DeckHeader(
             title = "Rotation",
             subtitle = "${panel.name} · display ${panel.displayId}",
@@ -74,7 +85,7 @@ fun RotationPage(model: DeckViewModel) {
         Spacer(Modifier.height(12.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            RotationController.Mode.entries.chunked(3).forEach { row ->
+            modes.chunked(3).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { mode ->
                         DeckButton(
@@ -91,22 +102,184 @@ fun RotationPage(model: DeckViewModel) {
         }
 
         Spacer(Modifier.height(12.dp))
+
+        if (isCover && state.autoRotate) {
+            AutoRotateCard()
+            Spacer(Modifier.height(10.dp))
+        }
+
         DeckCard {
             Column {
-                ToggleRow(
-                    label = "Force apps to obey",
-                    description = "Ignore each app's requested orientation",
-                    checked = state.forceAppsToObey,
-                    onChange = { model.applyRotation(state.mode, it) },
-                )
-                Spacer(Modifier.height(6.dp))
+                // Obeying only means something while CoverDeck is pinning the display.
+                val pinning = state.mode.rotation != null || (isCover && state.mode == RotationController.Mode.AUTO)
+                if (pinning) {
+                    ToggleRow(
+                        label = "Force apps to obey",
+                        description = "Ignore each app's and the cover launcher's requested orientation",
+                        checked = state.forceAppsToObey,
+                        onChange = { model.applyRotation(state.mode, it) },
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
                 InfoRow("Current rotation", "${state.currentRotation * 90}°")
                 InfoRow(
-                    "Lock state",
-                    if (state.frozen) "Frozen" else "Following sensor",
-                    tone = if (state.frozen) Tone.Active else Tone.Neutral,
+                    "Controlled by",
+                    when {
+                        state.autoRotate -> "CoverDeck, following the phone"
+                        state.frozen -> "CoverDeck, locked"
+                        isCover -> "One UI (Samsung default)"
+                        else -> "One UI auto-rotate"
+                    },
+                    tone = if (state.frozen || state.autoRotate) Tone.Active else Tone.Neutral,
+                )
+                if (isCover && state.mode == RotationController.Mode.SYSTEM) {
+                    Text(
+                        "Samsung's default. The cover home screen and most cover apps force " +
+                            "their natural orientation, so the cover usually won't turn. " +
+                            "Pick Auto to have it follow the phone everywhere.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DeckColors.TextTertiary,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Live view of the cover auto-rotate loop, plus a two-step calibration. The loop's
+ * readings come straight from the service, so what is shown is what it is acting on.
+ */
+@Composable
+private fun AutoRotateCard() {
+    val raw by AutoRotate.rawReading.collectAsState()
+    val applied by AutoRotate.appliedRotation.collectAsState()
+    val source by AutoRotate.source.collectAsState()
+    val upsideDown by AutoRotate.allowUpsideDown.collectAsState()
+    val calibrated by AutoRotate.calibrated.collectAsState()
+
+    // 0 = idle, 1 = waiting for the normal position, 2 = waiting for a clockwise turn.
+    var step by remember { mutableIntStateOf(0) }
+    var normalReading by remember { mutableStateOf<Int?>(null) }
+    var calibrationError by remember { mutableStateOf<String?>(null) }
+
+    // Leaving the page mid-calibration must not leave rotation paused.
+    DisposableEffect(Unit) { onDispose { AutoRotate.calibrating = false } }
+
+    val live = source == "device orientation sensor" || source == "accelerometer"
+
+    fun cancel() {
+        AutoRotate.calibrating = false
+        step = 0
+        normalReading = null
+    }
+
+    DeckCard {
+        Column {
+            Text("Cover auto-rotate", style = MaterialTheme.typography.titleMedium, color = DeckColors.TextPrimary)
+            Text(
+                "CoverDeck turns the cover to match the phone, in every app and on the cover home screen.",
+                style = MaterialTheme.typography.bodySmall,
+                color = DeckColors.TextSecondary,
+                modifier = Modifier.padding(top = 3.dp, bottom = 8.dp),
+            )
+            ToggleRow(
+                label = "Allow upside-down",
+                description = "Off matches how the inner screen behaves",
+                checked = upsideDown,
+                onChange = AutoRotate::setAllowUpsideDown,
+            )
+            Spacer(Modifier.height(6.dp))
+            InfoRow("Sensor", source, tone = if (live) Tone.Success else Tone.Warning)
+            InfoRow("Applied", applied?.let { "${it * 90}°" } ?: "waiting for movement")
+            InfoRow("Mapping", if (calibrated) "Calibrated" else "Default")
+            Spacer(Modifier.height(8.dp))
+
+            when (step) {
+                0 -> {
+                    calibrationError?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = DeckColors.Warning)
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    DeckButton(
+                        text = "Turns the wrong way? Calibrate",
+                        filled = false,
+                        enabled = live,
+                        onClick = {
+                            AutoRotate.calibrating = true
+                            calibrationError = null
+                            step = 1
+                        },
+                    )
+                    if (calibrated) {
+                        Spacer(Modifier.height(6.dp))
+                        DeckButton(
+                            text = "Reset calibration",
+                            filled = false,
+                            tone = Tone.Neutral,
+                            onClick = {
+                                AutoRotate.resetCalibration()
+                                AutoRotate.requestReapply()
+                            },
+                        )
+                    }
+                }
+
+                1 -> CalibrationStep(
+                    text = "1 of 2 · Hold the folded phone the way you normally read the cover, then tap Next.",
+                    actionLabel = "Next",
+                    actionEnabled = raw != null,
+                    onCancel = ::cancel,
+                    onAction = {
+                        normalReading = raw
+                        step = 2
+                    },
+                )
+
+                else -> CalibrationStep(
+                    text = "2 of 2 · Turn it a quarter turn clockwise, so the right side points down, then tap Done.",
+                    actionLabel = "Done",
+                    actionEnabled = raw != null && raw != normalReading,
+                    onCancel = ::cancel,
+                    onAction = {
+                        val ok = AutoRotate.calibrate(normalReading ?: 0, raw ?: 0)
+                        calibrationError = if (ok) null else
+                            "Those two positions weren't a quarter turn apart. Try again."
+                        cancel()
+                        if (ok) AutoRotate.requestReapply()
+                    },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun CalibrationStep(
+    text: String,
+    actionLabel: String,
+    actionEnabled: Boolean,
+    onCancel: () -> Unit,
+    onAction: () -> Unit,
+) {
+    Column {
+        Text(text, style = MaterialTheme.typography.bodySmall, color = DeckColors.AccentBright)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DeckButton(
+                text = "Cancel",
+                filled = false,
+                tone = Tone.Neutral,
+                modifier = Modifier.weight(1f),
+                onClick = onCancel,
+            )
+            DeckButton(
+                text = actionLabel,
+                enabled = actionEnabled,
+                modifier = Modifier.weight(1f),
+                onClick = onAction,
+            )
         }
     }
 }
@@ -459,7 +632,9 @@ fun MirrorPage(model: DeckViewModel) {
                         icon = Icons.Rounded.CastConnected,
                         tone = Tone.Danger,
                         onClick = {
-                            CoverDeckService.send(context, CoverDeckService.ACTION_STOP_MIRROR)
+                            if (CoverDeckService.isRunning) {
+                                CoverDeckService.send(context, CoverDeckService.ACTION_STOP_MIRROR)
+                            }
                             model.mirror.stop()
                         },
                     )
@@ -469,7 +644,6 @@ fun MirrorPage(model: DeckViewModel) {
                         icon = Icons.Rounded.Cast,
                         enabled = model.hasOverlayPermission(),
                         onClick = {
-                            if (!CoverDeckService.isRunning) CoverDeckService.start(context)
                             CoverDeckService.send(context, CoverDeckService.ACTION_START_MIRROR)
                         },
                     )
