@@ -1,6 +1,7 @@
 package com.raihan.coverdeck.privileged
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
@@ -11,10 +12,12 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
+import com.raihan.coverdeck.INavGestureListener
 import com.raihan.coverdeck.IPrivilegedService
 import com.raihan.coverdeck.model.TaskItem
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.system.exitProcess
 
 /**
  * The privileged half of CoverDeck.
@@ -40,6 +43,8 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
 
     private var activeMirror: MirrorEngine? = null
 
+    private val navWatcher = NavLogWatcher()
+
     init {
         Hidden.init()
         Log.i(Hidden.TAG, "PrivilegedService up as uid=${Process.myUid()} sdk=${Build.VERSION.SDK_INT}")
@@ -47,7 +52,12 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
 
     override fun destroy() {
         runCatching { stopMirror() }
+        runCatching { navWatcher.stop() }
         Log.i(Hidden.TAG, "PrivilegedService destroyed")
+        // Shizuku only *asks* the service to stop; the process lives on unless it exits.
+        // Without this every reinstall and app restart left another ~200 MB shell-uid
+        // process behind (ten were found running on-device).
+        exitProcess(0)
     }
 
     override fun ping(): String =
@@ -80,26 +90,26 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
 
     override fun freezeRotation(displayId: Int, rotation: Int) {
         val wm = Hidden.windowManager
-        val done = Hidden.callAny(
+        val done = Hidden.callVoid(
             wm, "freezeDisplayRotation",
             // Android 14+ added a caller tag for rotation attribution.
             Hidden.sig(Int::class.java, Int::class.java, String::class.java) to
                 Hidden.args(displayId, rotation, CALLER),
             Hidden.sig(Int::class.java, Int::class.java) to Hidden.args(displayId, rotation),
         )
-        if (done == null) {
+        if (!done) {
             Hidden.sh("wm user-rotation -d $displayId lock $rotation")
         }
     }
 
     override fun thawRotation(displayId: Int) {
         val wm = Hidden.windowManager
-        val done = Hidden.callAny(
+        val done = Hidden.callVoid(
             wm, "thawDisplayRotation",
             Hidden.sig(Int::class.java, String::class.java) to Hidden.args(displayId, CALLER),
             Hidden.sig(Int::class.java) to Hidden.args(displayId),
         )
-        if (done == null) {
+        if (!done) {
             Hidden.sh("wm user-rotation -d $displayId free")
         }
     }
@@ -120,21 +130,21 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
      * "locked" actually mean locked.
      */
     override fun setIgnoreOrientationRequest(displayId: Int, ignore: Boolean) {
-        val done = Hidden.callAny(
+        val done = Hidden.callVoid(
             Hidden.windowManager, "setIgnoreOrientationRequest",
             Hidden.sig(Int::class.java, Boolean::class.java) to Hidden.args(displayId, ignore),
         )
-        if (done == null) {
+        if (!done) {
             Hidden.sh("wm set-ignore-orientation-request -d $displayId $ignore")
         }
     }
 
     override fun setFixedToUserRotation(displayId: Int, mode: Int) {
-        val done = Hidden.callAny(
+        val done = Hidden.callVoid(
             Hidden.windowManager, "setFixedToUserRotation",
             Hidden.sig(Int::class.java, Int::class.java) to Hidden.args(displayId, mode),
         )
-        if (done == null) {
+        if (!done) {
             val word = when (mode) {
                 1 -> "disabled"
                 2 -> "enabled"
@@ -168,22 +178,22 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
     }
 
     override fun setDensity(displayId: Int, density: Int) {
-        val done = Hidden.callAny(
+        val done = Hidden.callVoid(
             Hidden.windowManager, "setForcedDisplayDensityForUser",
             Hidden.sig(Int::class.java, Int::class.java, Int::class.java) to
                 Hidden.args(displayId, density, USER_SYSTEM),
         )
-        if (done == null) {
+        if (!done) {
             Hidden.sh("wm density $density -d $displayId")
         }
     }
 
     override fun resetDensity(displayId: Int) {
-        val done = Hidden.callAny(
+        val done = Hidden.callVoid(
             Hidden.windowManager, "clearForcedDisplayDensityForUser",
             Hidden.sig(Int::class.java, Int::class.java) to Hidden.args(displayId, USER_SYSTEM),
         )
-        if (done == null) {
+        if (!done) {
             Hidden.sh("wm density reset -d $displayId")
         }
     }
@@ -211,7 +221,14 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
             return emptyList()
         }
 
-        return raw.mapNotNull { info -> toTaskItem(info) }
+        return raw.mapNotNull { info ->
+            // Launchers and the recents screen itself are tasks too. Filter them by the
+            // type the system gives them, not by package: com.android.settings declares a
+            // HOME activity (FallbackHome), and hiding "home packages" hid every Settings
+            // task along with it.
+            val type = runCatching { info.javaClass.getField("topActivityType").getInt(info) }.getOrNull()
+            if (type == ACTIVITY_TYPE_HOME || type == ACTIVITY_TYPE_RECENTS) null else toTaskItem(info)
+        }
     }
 
     private fun toTaskItem(info: Any): TaskItem? = runCatching {
@@ -250,12 +267,21 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
 
     override fun getTaskSnapshot(taskId: Int, maxDim: Int): Bitmap? {
         val atm = Hidden.activityTaskManager ?: return null
+        // A task only has a stored snapshot once it has been backgrounded, so the app
+        // currently on screen came back empty. Try the cached low-res copy, then the
+        // full-res one, then ask the window manager to take a fresh snapshot.
         val snapshot = Hidden.callAny(
             atm, "getTaskSnapshot",
-            // Android 14 added takeSnapshotIfNeeded.
             Hidden.sig(Int::class.java, Boolean::class.java, Boolean::class.java) to
                 Hidden.args(taskId, true, true),
             Hidden.sig(Int::class.java, Boolean::class.java) to Hidden.args(taskId, true),
+        ) ?: Hidden.callAny(
+            atm, "getTaskSnapshot",
+            Hidden.sig(Int::class.java, Boolean::class.java) to Hidden.args(taskId, false),
+        ) ?: Hidden.callAny(
+            atm, "takeTaskSnapshot",
+            Hidden.sig(Int::class.java, Boolean::class.java) to Hidden.args(taskId, false),
+            Hidden.sig(Int::class.java) to Hidden.args(taskId),
         ) ?: return null
 
         return runCatching {
@@ -311,10 +337,11 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
     }
 
     override fun moveTaskToDisplay(taskId: Int, displayId: Int) {
-        Hidden.callAny(
+        val moved = Hidden.callVoid(
             Hidden.activityTaskManager, "moveRootTaskToDisplay",
             Hidden.sig(Int::class.java, Int::class.java) to Hidden.args(taskId, displayId),
-        ) ?: Hidden.sh("am display move-stack $taskId $displayId")
+        )
+        if (!moved) Hidden.sh("am display move-stack $taskId $displayId")
     }
 
     override fun launchPackage(packageName: String, displayId: Int): Boolean {
@@ -434,6 +461,65 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
         }
     }
 
+    // =====================================================================
+    // System surfaces
+    // =====================================================================
+
+    /**
+     * Closes the shade. Verified on the Flip 5 that this also closes the *cover* quick
+     * panel (SubScreenQuickPanel, a NOTIFICATION_SHADE_WIDGET window), which otherwise
+     * sits above recents and hides it.
+     */
+    override fun collapseStatusBar() {
+        val statusBar = Hidden.binder("statusbar")?.let {
+            Hidden.stub("com.android.internal.statusbar.IStatusBarService", it)
+        }
+        if (!Hidden.callVoid(statusBar, "collapsePanels", Hidden.sig() to Hidden.args())) {
+            Hidden.sh("cmd statusbar collapse")
+        }
+    }
+
+    /**
+     * Starts [intent] on [displayId] as shell. Recents has to be an activity rather than
+     * an overlay: Settings and One UI Home's settings screens set
+     * HIDE_NON_SYSTEM_OVERLAY_WINDOWS, which force-hides every app overlay while they
+     * are showing (seen on-device as setForceHideNonSystemOverlayWindowIfNeeded). And
+     * shell, unlike a backgrounded app, is allowed to start activities from the
+     * background.
+     */
+    override fun startActivityOnDisplay(intent: Intent, displayId: Int): Boolean {
+        val options = launchOptions(displayId)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        // IActivityManager.startActivityAsUserWithFeature(caller, callingPackage,
+        // callingFeatureId, intent, resolvedType, resultTo, resultWho, requestCode,
+        // flags, profilerInfo, options, userId): present since Android 11 and the same
+        // entry point scrcpy uses from this exact shell-uid position.
+        val am = Hidden.activityManager
+        val method = am?.javaClass?.methods?.firstOrNull {
+            it.name == "startActivityAsUserWithFeature" && it.parameterTypes.size == 12
+        }
+        if (method != null) {
+            val result = runCatching {
+                method.invoke(
+                    am, null, Hidden.SHELL_PACKAGE, null, intent, null, null, null,
+                    0, 0, null, options, USER_CURRENT,
+                ) as? Int
+            }.onFailure { Log.w(Hidden.TAG, "startActivityAsUserWithFeature failed: ${it.cause ?: it}") }
+                .getOrNull()
+            // START_SUCCESS is 0; the other non-negative codes (e.g. delivered to top) are fine.
+            if (result != null && result >= 0) return true
+        }
+
+        val component = intent.component?.flattenToShortString() ?: return false
+        val out = Hidden.sh("am start --display $displayId --activity-no-animation -n $component")
+        return !out.contains("Error", ignoreCase = true)
+    }
+
+    override fun startNavWatcher(listener: INavGestureListener) = navWatcher.start(listener)
+
+    override fun stopNavWatcher() = navWatcher.stop()
+
     override fun injectKey(keyCode: Int, targetDisplayId: Int) {
         val now = SystemClock.uptimeMillis()
         var handled = true
@@ -472,6 +558,9 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
         const val CALLER = "CoverDeck"
         const val USER_SYSTEM = 0
         const val RECENT_IGNORE_UNAVAILABLE = 0x0002
+        const val USER_CURRENT = -2
+        const val ACTIVITY_TYPE_HOME = 2
+        const val ACTIVITY_TYPE_RECENTS = 3
         const val INJECT_ASYNC = 0
     }
 }

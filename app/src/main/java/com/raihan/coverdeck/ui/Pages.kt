@@ -495,13 +495,14 @@ private fun ToggleRow(
 fun RecentsPage(model: DeckViewModel) {
     val entries by model.recents.entries.collectAsState()
     val loading by model.recents.loading.collectAsState()
+    val kept by model.recents.keptOpen.collectAsState()
     val cover by model.coverPanel.collectAsState()
     val main by model.mainPanel.collectAsState()
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
         DeckHeader(
             title = "Recents",
-            subtitle = "${entries.size} task${if (entries.size == 1) "" else "s"}",
+            subtitle = "Long-press the cover's Home button for this anywhere",
             onBack = model::back,
             trailing = {
                 DeckButton(
@@ -514,24 +515,18 @@ fun RecentsPage(model: DeckViewModel) {
             },
         )
 
-        RecentsCarousel(
+        CoverRecents(
             entries = entries,
             loading = loading,
+            keptOpen = kept,
             modifier = Modifier.fillMaxWidth().weight(1f),
             onOpen = { model.recents.resume(it, cover.displayId) },
             onClose = { model.recents.close(it) },
-            onSendToOtherScreen = { model.recents.resume(it, main.displayId) },
+            onCloseAll = { model.recents.closeAll() },
+            onToggleKeepOpen = model.recents::toggleKeepOpen,
+            onAppInfo = { model.recents.openAppInfo(it, cover.displayId) },
+            onOpenOnOtherScreen = { model.recents.resume(it, main.displayId) },
         )
-
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Tap to resume on the cover screen · flick a card up to close · " +
-                "the corner button sends it to the inner screen.",
-            style = MaterialTheme.typography.bodySmall,
-            color = DeckColors.TextTertiary,
-        )
-        Spacer(Modifier.height(8.dp))
-        CloseAllButton { model.recents.closeAll() }
     }
 }
 
@@ -689,7 +684,38 @@ fun MirrorPage(model: DeckViewModel) {
 // =========================================================================
 
 @Composable
-fun SetupPage(model: DeckViewModel) {
+fun SetupPage(model: DeckViewModel) = SetupPageContent(model)
+
+/** Setup for the Home long-press: a switch, what it does, and a way to try recents. */
+@Composable
+private fun HomeLongPressCard(model: DeckViewModel, shizukuReady: Boolean) {
+    val enabled by model.homeLongPressEnabled.collectAsState()
+
+    DeckCard {
+        Column {
+            ToggleRow(
+                label = "Home long-press for recents",
+                description = if (enabled) "On" else "Off",
+                checked = enabled,
+                onChange = { if (shizukuReady) model.setHomeLongPress(it) },
+            )
+            Text(
+                "Hold the Home button on the cover screen to open recents. Tap Home or Back to " +
+                    "close them. One UI has no recents on the cover, so CoverDeck provides them. " +
+                    "It works through Shizuku with no accessibility service. It only runs while " +
+                    "the phone is folded with the cover screen on, and it keeps the CoverDeck " +
+                    "notification showing.",
+                style = MaterialTheme.typography.bodySmall,
+                color = DeckColors.TextSecondary,
+                modifier = Modifier.padding(top = 6.dp, bottom = 10.dp),
+            )
+            DeckButton(text = "Try recents now", onClick = model::previewCoverRecents)
+        }
+    }
+}
+
+@Composable
+private fun SetupPageContent(model: DeckViewModel) {
     val status by model.privilegedStatus.collectAsState()
     val context = LocalContext.current
     val cover by model.coverPanel.collectAsState()
@@ -738,6 +764,9 @@ fun SetupPage(model: DeckViewModel) {
         }
 
         Spacer(Modifier.height(10.dp))
+        HomeLongPressCard(model, shizukuReady = status is Privileged.Status.Ready)
+
+        Spacer(Modifier.height(10.dp))
         DeckCard {
             Column {
                 Text(
@@ -746,7 +775,7 @@ fun SetupPage(model: DeckViewModel) {
                     color = DeckColors.TextPrimary,
                 )
                 Text(
-                    "Required for the gesture strip, the recents panel and the mirror window.",
+                    "Required for the mirror window on the cover.",
                     style = MaterialTheme.typography.bodySmall,
                     color = DeckColors.TextSecondary,
                     modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),

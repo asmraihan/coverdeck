@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REORDER_TASKS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
@@ -52,9 +53,29 @@
         </activity>
 
         <!--
-          The overlay host: owns the cover-screen gesture strip, the recents panel
-          and the mirror surface. All three are windows on display 1, not activities,
-          so a device-state change cannot relocate them to the inner screen.
+          Cover recents. An activity rather than an overlay: Settings force-hides app
+          overlays, and activities are not affected. Exported only because the Shizuku
+          helper launches it as shell, and shell may not start non-exported activities of
+          another app; it shows nothing sensitive and acts only through CoverDeck.
+          Its own task affinity keeps it from dragging the main CoverDeck task along.
+        -->
+        <activity
+            android:name=".recents.CoverRecentsActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.raihan.coverdeck.recents"
+            android:resizeableActivity="true"
+            android:screenOrientation="unspecified"
+            android:theme="@style/Theme.CoverDeck.Recents"
+            tools:ignore="DiscouragedApi"
+            android:configChanges="density|fontScale|screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|uiMode|layoutDirection" />
+
+        <!--
+          Hosts cover auto-rotate, the Home long-press watcher and the mirror surface. The
+          mirror is a window on display 1, not an activity, so a device-state change cannot
+          relocate it to the inner screen.
         -->
         <service
             android:name=".overlay.CoverDeckService"
@@ -63,8 +84,7 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="cover_screen_window_controller" />
-        </service>
-        <provider
+        </service>        <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
             android:multiprocess="false"

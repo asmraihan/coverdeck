@@ -167,6 +167,31 @@ internal object Hidden {
         return null
     }
 
+    /**
+     * [callAny] for methods that return void. Those invoke successfully yet return null,
+     * which callAny cannot tell apart from "no such method", so every void call used to
+     * run its shell fallback as well (an extra `wm` process on each cover rotation).
+     * Returns whether a signature was found and invoked without throwing.
+     */
+    fun callVoid(
+        owner: Any?,
+        name: String,
+        vararg variants: Pair<Array<Class<*>>, Array<Any?>>,
+    ): Boolean {
+        if (owner == null) return false
+        for ((params, args) in variants) {
+            val m = method(owner, name, *params) ?: continue
+            try {
+                m.invoke(owner, *args)
+                return true
+            } catch (t: Throwable) {
+                Log.w(TAG, "$name${params.map { it.simpleName }} threw: ${t.cause ?: t}")
+            }
+        }
+        Log.w(TAG, "no usable signature for $name on ${owner.javaClass.simpleName}")
+        return false
+    }
+
     fun sig(vararg p: Class<*>): Array<Class<*>> = arrayOf(*p)
     fun args(vararg a: Any?): Array<Any?> = arrayOf(*a)
 

@@ -11,4 +11,23 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>
+
+    <!--
+      See-through window for cover recents: the app underneath stays visible (blurred and
+      dimmed by the activity itself), and it fades rather than sliding in.
+    -->
+    <style name="Theme.CoverDeck.Recents" parent="Theme.CoverDeck">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@style/Animation.CoverDeck.Recents</item>
+    </style>
+
+    <style name="Animation.CoverDeck.Recents" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@android:anim/fade_in</item>
+        <item name="android:activityOpenExitAnimation">@null</item>
+        <item name="android:activityCloseEnterAnimation">@null</item>
+        <item name="android:activityCloseExitAnimation">@android:anim/fade_out</item>
+    </style>
 </resources>

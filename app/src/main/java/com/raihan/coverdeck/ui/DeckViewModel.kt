@@ -12,7 +12,9 @@ import com.raihan.coverdeck.feature.DensityController
 import com.raihan.coverdeck.feature.MirrorController
 import com.raihan.coverdeck.feature.RecentsController
 import com.raihan.coverdeck.feature.RotationController
+import com.raihan.coverdeck.nav.HomeLongPress
 import com.raihan.coverdeck.overlay.CoverDeckService
+import com.raihan.coverdeck.recents.RecentsPanel
 import com.raihan.coverdeck.privileged.Privileged
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,8 +48,8 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     private val _mainPanel = MutableStateFlow(Displays.main(context))
     val mainPanel: StateFlow<Panel> = _mainPanel.asStateFlow()
 
-    /** The strip is a persisted switch now, independent of whether the service is up. */
-    val stripEnabled: StateFlow<Boolean> = CoverDeckService.stripEnabled
+    /** The "hold the cover's Home button for recents" switch. */
+    val homeLongPressEnabled: StateFlow<Boolean> = HomeLongPress.enabled
 
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
@@ -91,6 +93,7 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         if (strandedDpi != null) {
             _notice.value = "Reverted an unconfirmed ${strandedDpi} dpi change on the cover screen."
         }
+        HomeLongPress.cleanUpLegacyAccessibility(context)
         resumePersistentFeatures()
         refreshDisplayState()
     }
@@ -110,30 +113,33 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { recents.refresh() }
     }
 
-    fun toggleStrip() {
-        if (stripEnabled.value) {
-            if (CoverDeckService.isRunning) {
-                CoverDeckService.send(context, CoverDeckService.ACTION_STRIP_OFF)
-            }
+    fun setHomeLongPress(on: Boolean) {
+        if (on) {
+            // No overlay permission needed any more: recents is an activity, launched by
+            // the Shizuku helper.
+            HomeLongPress.setEnabled(true)
+            CoverDeckService.send(context, CoverDeckService.ACTION_HOME_LONGPRESS_ON)
         } else {
-            if (!Settings.canDrawOverlays(context)) {
-                _notice.value = "Grant \"Display over other apps\" first."
-                return
+            HomeLongPress.setEnabled(false)
+            if (CoverDeckService.isRunning) {
+                CoverDeckService.send(context, CoverDeckService.ACTION_HOME_LONGPRESS_OFF)
             }
-            CoverDeckService.send(context, CoverDeckService.ACTION_STRIP_ON)
         }
     }
 
+    /** Opens the same recents panel the Home long-press does, so it can be tried out. */
+    fun previewCoverRecents() = RecentsPanel.show(context)
+
     /**
-     * Brings the service back when a persisted feature (auto-rotate, strip) is on but
-     * the process was killed. Called from the foreground activity, where starting a
+     * Brings the service back when a persisted feature (auto-rotate, Home long-press) is
+     * on but the process was killed. Called from the foreground activity, where starting a
      * foreground service is always allowed.
      */
     fun resumePersistentFeatures() {
         if (CoverDeckService.isRunning) return
         val action = when {
             AutoRotate.enabled.value -> CoverDeckService.ACTION_AUTO_ROTATE_ON
-            stripEnabled.value && Settings.canDrawOverlays(context) -> CoverDeckService.ACTION_STRIP_ON
+            HomeLongPress.enabled.value -> CoverDeckService.ACTION_HOME_LONGPRESS_ON
             else -> return
         }
         runCatching { CoverDeckService.send(context, action) }
@@ -162,7 +168,7 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshDisplayState()
         _notice.value = if (undone.isEmpty()) {
-            "Mirroring and the gesture strip are off. Rotation and density were never changed."
+            "Mirroring and auto-rotate are off. Rotation and density were never changed."
         } else {
             "Restored ${undone.joinToString()} to how they were before CoverDeck."
         }

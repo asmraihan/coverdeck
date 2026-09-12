@@ -27,7 +27,7 @@ import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.ScreenRotation
-import androidx.compose.material.icons.rounded.SwipeUp
+import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -72,7 +72,7 @@ private fun HomeScreen(model: DeckViewModel) {
     val cover by model.coverPanel.collectAsState()
     val main by model.mainPanel.collectAsState()
     val notice by model.notice.collectAsState()
-    val stripOn by model.stripEnabled.collectAsState()
+    val navOn by model.homeLongPressEnabled.collectAsState()
 
     val panel = if (target == Target.Cover) cover else main
     val rotation by model.rotationState(panel.displayId).collectAsState()
@@ -177,12 +177,12 @@ private fun HomeScreen(model: DeckViewModel) {
             }
             item {
                 DeckTile(
-                    icon = Icons.Rounded.SwipeUp,
-                    title = "Gesture strip",
-                    status = if (stripOn) "On" else "Off",
-                    active = stripOn,
+                    icon = Icons.Rounded.TouchApp,
+                    title = "Home long-press",
+                    status = if (navOn) "On · hold for recents" else "Off",
+                    active = navOn,
                     enabled = ready,
-                    onClick = { model.toggleStrip() },
+                    onClick = { model.setHomeLongPress(!navOn) },
                 )
             }
             item {

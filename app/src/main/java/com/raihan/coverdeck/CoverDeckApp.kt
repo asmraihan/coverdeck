@@ -3,7 +3,7 @@ package com.raihan.coverdeck
 import android.app.Application
 import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.RotationController
-import com.raihan.coverdeck.overlay.CoverDeckService
+import com.raihan.coverdeck.nav.HomeLongPress
 import com.raihan.coverdeck.privileged.Privileged
 
 class CoverDeckApp : Application() {
@@ -14,6 +14,6 @@ class CoverDeckApp : Application() {
         Privileged.init(this)
         RotationController.init(this)
         AutoRotate.init(this)
-        CoverDeckService.loadServicePrefs(this)
+        HomeLongPress.init(this)
     }
 }

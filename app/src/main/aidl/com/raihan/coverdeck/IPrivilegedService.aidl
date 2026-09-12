@@ -3,6 +3,8 @@ package com.raihan.coverdeck;
 import com.raihan.coverdeck.model.TaskItem;
 import android.view.Surface;
 import android.graphics.Bitmap;
+import android.content.Intent;
+import com.raihan.coverdeck.INavGestureListener;
 
 interface IPrivilegedService {
     /**
@@ -47,4 +49,14 @@ interface IPrivilegedService {
     String getMirrorEngine() = 46;
     void injectTouch(int action, float x, float y, int targetDisplayId, long downTime, int pointerId) = 47;
     void injectKey(int keyCode, int targetDisplayId) = 48;
+
+    // ---- cover navigation gestures ----------------------------------------
+    void startNavWatcher(INavGestureListener listener) = 50;
+    void stopNavWatcher() = 51;
+
+    // ---- system surfaces --------------------------------------------------
+    /** Closes the notification shade and the cover screen quick panel. */
+    void collapseStatusBar() = 52;
+    /** Starts an activity on a display as shell, which may start activities from the background. */
+    boolean startActivityOnDisplay(in Intent intent, int displayId) = 53;
 }
