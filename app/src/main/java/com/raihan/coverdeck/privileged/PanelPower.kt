@@ -1,5 +1,6 @@
 package com.raihan.coverdeck.privileged
 
+import android.annotation.SuppressLint
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -17,7 +18,12 @@ internal object PanelPower {
     const val POWER_MODE_OFF = 0
     const val POWER_MODE_NORMAL = 2
 
-    private val displayControl: Class<*>? by lazy {
+    private val displayControl: Class<*>? by lazy { loadDisplayControl() }
+
+    // Lint judges this by the app's target SDK, but it only ever runs in the Shizuku
+    // helper, a shell-uid app_process with no hidden-API restrictions (as scrcpy's does).
+    @SuppressLint("BlockedPrivateApi", "DiscouragedPrivateApi", "PrivateApi")
+    private fun loadDisplayControl(): Class<*>? =
         runCatching {
             val factory = Class.forName("com.android.internal.os.ClassLoaderFactory")
             val create = factory.getDeclaredMethod(
@@ -35,7 +41,6 @@ internal object PanelPower {
             loadLibrary.invoke(Runtime.getRuntime(), cls, "android_servers")
             cls
         }.onFailure { Log.w(Hidden.TAG, "DisplayControl unavailable: ${it.message}") }.getOrNull()
-    }
 
     fun displayToken(physicalId: Long): IBinder? {
         if (Build.VERSION.SDK_INT >= 34) {

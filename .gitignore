@@ -14,6 +14,11 @@ build/
 # Machine-local: holds this computer's SDK path
 local.properties
 
+# Release signing: the key and its passwords never go into git
+keystore.properties
+*.jks
+*.keystore
+
 # IDE
 *.iml
 .idea/
