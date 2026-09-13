@@ -9,9 +9,9 @@ import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.core.Panel
 import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.DensityController
-import com.raihan.coverdeck.feature.MirrorController
 import com.raihan.coverdeck.feature.RecentsController
 import com.raihan.coverdeck.feature.RotationController
+import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.nav.HomeLongPress
 import com.raihan.coverdeck.overlay.CoverDeckService
 import com.raihan.coverdeck.recents.RecentsPanel
@@ -32,7 +32,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
 
     val density = DensityController(context)
     val recents = RecentsController(context)
-    val mirror = MirrorController(context)
 
     val privilegedStatus: StateFlow<Privileged.Status> = Privileged.status
 
@@ -85,9 +84,10 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
      * have left applied before the user sees stale values in the tiles.
      */
     fun onPrivilegedReady() {
-        mirror.refresh()
-        if (mirror.recoverStrandedOverride()) {
-            _notice.value = "Released a device-state override left over from a previous run."
+        viewModelScope.launch(MirrorSession.worker) {
+            if (MirrorSession.recoverStranded()) {
+                _notice.value = "Restored the inner screen after a mirror session that didn't close cleanly."
+            }
         }
         val strandedDpi = density.recoverUnconfirmed(_coverPanel.value.displayId)
         if (strandedDpi != null) {
@@ -147,6 +147,10 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
 
     fun hasOverlayPermission(): Boolean = Settings.canDrawOverlays(context)
 
+    fun stopMirror() {
+        viewModelScope.launch(MirrorSession.worker) { MirrorSession.end() }
+    }
+
     /**
      * The panic button: undo everything CoverDeck changed, and only that.
      *
@@ -156,7 +160,7 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
      * left strictly alone.
      */
     fun resetEverything() {
-        mirror.stop(alsoReleaseDeviceState = true)
+        viewModelScope.launch(MirrorSession.worker) { MirrorSession.end() }
         CoverDeckService.stop(context)
 
         val undone = mutableListOf<String>()

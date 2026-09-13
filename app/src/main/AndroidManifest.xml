@@ -73,9 +73,45 @@
             android:configChanges="density|fontScale|screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|uiMode|layoutDirection" />
 
         <!--
-          Hosts cover auto-rotate, the Home long-press watcher and the mirror surface. The
-          mirror is a window on display 1, not an activity, so a device-state change cannot
-          relocate it to the inner screen.
+          "Mirror" launcher entry: starts or reopens mirror mode and closes immediately.
+          Add it to the cover screen with MultiStar for one-tap access. Exported because it
+          is a launcher entry.
+        -->
+        <activity
+            android:name=".mirror.MirrorShortcutActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="com.raihan.coverdeck.mirror"
+            android:label="@string/mirror_shortcut_label"
+            android:icon="@mipmap/ic_launcher"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Mirror window host. An accessibility overlay is the only window type that sits
+          above the cover's system bars, is not hidden by Settings, and is not a task that
+          One UI would move to the inner display. Exported only to the system.
+        -->
+        <service
+            android:name=".mirror.MirrorHostService"
+            android:exported="true"
+            android:label="@string/mirror_host_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/mirror_host_service" />
+        </service>
+
+        <!--
+          Hosts cover auto-rotate and the Home long-press watcher.
         -->
         <service
             android:name=".overlay.CoverDeckService"
@@ -84,7 +120,9 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="cover_screen_window_controller" />
-        </service>        <provider
+        </service>
+
+        <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
             android:multiprocess="false"

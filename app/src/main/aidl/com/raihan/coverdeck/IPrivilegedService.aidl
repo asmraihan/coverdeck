@@ -4,6 +4,7 @@ import com.raihan.coverdeck.model.TaskItem;
 import android.view.Surface;
 import android.graphics.Bitmap;
 import android.content.Intent;
+import android.view.MotionEvent;
 import com.raihan.coverdeck.INavGestureListener;
 
 interface IPrivilegedService {
@@ -59,4 +60,20 @@ interface IPrivilegedService {
     void collapseStatusBar() = 52;
     /** Starts an activity on a display as shell, which may start activities from the background. */
     boolean startActivityOnDisplay(in Intent intent, int displayId) = 53;
+
+    // ---- display geometry (works while a panel is off or disabled) ----------
+    /** [initialWidth, initialHeight, currentWidth, currentHeight], unrotated. */
+    int[] getDisplaySizes(int displayId) = 60;
+    void setDisplaySize(int displayId, int width, int height) = 61;
+    void resetDisplaySize(int displayId) = 62;
+
+    // ---- mirror ---------------------------------------------------------------
+    /** A whole (possibly multi-touch) event, already in target-display coordinates. */
+    oneway void injectMotionEvent(in MotionEvent event, int targetDisplayId) = 63;
+
+    /**
+     * Keeps the inner display powered while folded (device-state override) or lets it
+     * sleep. Returns whether the requested state is in effect.
+     */
+    boolean setInnerDisplayAwake(boolean awake) = 64;
 }

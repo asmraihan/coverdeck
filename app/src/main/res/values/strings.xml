@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">CoverDeck</string>
+    <string name="mirror_shortcut_label">Mirror</string>
+    <string name="mirror_host_label">CoverDeck mirror</string>
+    <string name="mirror_host_summary">Shows the inner screen on the cover in mirror mode</string>
+    <string name="mirror_host_description">Lets CoverDeck draw the mirrored inner screen over the whole cover screen. It is used only to display that window: it does not read your screen, watch what you do, or intercept keys.</string>
 </resources>

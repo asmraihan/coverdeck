@@ -43,9 +43,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.DensityController
-import com.raihan.coverdeck.feature.MirrorController
+import com.raihan.coverdeck.mirror.MirrorHostService
+import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.feature.RotationController
-import com.raihan.coverdeck.overlay.CoverDeckService
 import com.raihan.coverdeck.privileged.Privileged
 import com.raihan.coverdeck.ui.theme.DeckColors
 import kotlin.math.roundToInt
@@ -536,12 +536,10 @@ fun RecentsPage(model: DeckViewModel) {
 
 @Composable
 fun MirrorPage(model: DeckViewModel) {
-    val state by model.mirror.state.collectAsState()
-    val cover by model.coverPanel.collectAsState()
-    val main by model.mainPanel.collectAsState()
+    val state by MirrorSession.state.collectAsState()
+    val hostOn by MirrorHostService.connected.collectAsState()
+    val ready = model.privilegedStatus.collectAsState().value is Privileged.Status.Ready
     val context = LocalContext.current
-
-    val (vw, vh) = model.mirror.virtualSize(main, cover, state.fitMode)
 
     Column(
         Modifier
@@ -551,105 +549,101 @@ fun MirrorPage(model: DeckViewModel) {
     ) {
         DeckHeader(
             title = "Mirror",
-            subtitle = "Inner screen on the cover",
+            subtitle = "Use the inner screen from the cover",
             onBack = model::back,
         )
 
-        DeckCard {
-            Column {
-                Text(
-                    "Continuity",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = DeckColors.TextPrimary,
-                )
-                Text(
-                    "Move a running app onto the cover screen. Reliable, no device-state " +
-                        "override, no extra battery cost. Start here.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = DeckColors.TextSecondary,
-                    modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),
-                )
-                DeckButton(
-                    text = "Pick an app to move",
-                    icon = Icons.AutoMirrored.Rounded.OpenInNew,
-                    onClick = { model.navigate(DeckRoute.Recents) },
-                )
+        if (!hostOn) {
+            DeckCard {
+                Column {
+                    Text("One-time setup", style = MaterialTheme.typography.titleMedium, color = DeckColors.TextPrimary)
+                    Text(
+                        "The mirror is drawn by CoverDeck's accessibility service. On this phone, " +
+                            "that's the only kind of window that can cover the whole cover " +
+                            "screen, including its navigation bar and quick panel, and stay " +
+                            "visible over Settings. The service is used only to show that " +
+                            "window. It doesn't read the screen or intercept keys.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DeckColors.TextSecondary,
+                        modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),
+                    )
+                    DeckButton(
+                        text = "Turn on with Shizuku",
+                        enabled = ready,
+                        onClick = { MirrorHostService.enableWithShizuku(context) },
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    DeckButton(
+                        text = "Open Accessibility settings",
+                        filled = false,
+                        tone = Tone.Neutral,
+                        onClick = { MirrorHostService.openSettings(context) },
+                    )
+                }
             }
+            Spacer(Modifier.height(10.dp))
         }
-
-        Spacer(Modifier.height(10.dp))
 
         DeckCard {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "True mirror",
+                        "Mirror mode",
                         style = MaterialTheme.typography.titleMedium,
                         color = DeckColors.TextPrimary,
                         modifier = Modifier.weight(1f),
                     )
-                    StatusChip("Experimental", Tone.Warning)
+                    StatusChip(
+                        when {
+                            state.streaming -> "Live"
+                            state.active -> "Paused"
+                            else -> "Off"
+                        },
+                        if (state.streaming) Tone.Success else Tone.Neutral,
+                    )
                 }
                 Text(
-                    "Closing the hinge powers the inner panel down, so CoverDeck overrides " +
-                        "the reported device state to keep it rendering, then mirrors it. " +
-                        "Expect real heat and battery drain while this is on.",
+                    "Uses the whole cover for the inner screen, held upright, and touch works " +
+                        "as if you were using it, including the inner screen's own navigation " +
+                        "bar. The strip beside the cameras has Recents, Home and Back too, and " +
+                        "⋯ opens the menu, where you stop mirroring. The cover stays awake " +
+                        "while mirroring; the power button " +
+                        "still turns it off, and the inner panel sleeps with it. The " +
+                        "\"Mirror\" app icon starts it in one tap.",
                     style = MaterialTheme.typography.bodySmall,
                     color = DeckColors.TextSecondary,
                     modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),
                 )
 
                 SegmentedSelector(
-                    options = MirrorController.FitMode.entries.map { it.label },
-                    selectedIndex = MirrorController.FitMode.entries.indexOf(state.fitMode),
+                    options = MirrorSession.Shape.entries.map { it.label },
+                    selectedIndex = MirrorSession.Shape.entries.indexOf(state.shape),
                     modifier = Modifier.fillMaxWidth(),
-                    onSelect = { model.mirror.setFitMode(MirrorController.FitMode.entries[it]) },
+                    onSelect = { MirrorSession.setShape(MirrorSession.Shape.entries[it]) },
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    state.fitMode.description,
+                    state.shape.description,
                     style = MaterialTheme.typography.bodySmall,
                     color = DeckColors.TextTertiary,
                 )
 
-                Spacer(Modifier.height(8.dp))
-                ToggleRow(
-                    label = "Touch passthrough",
-                    description = "Taps on the cover drive the inner screen",
-                    checked = state.touchEnabled,
-                    onChange = model.mirror::setTouchEnabled,
-                )
-
                 Spacer(Modifier.height(10.dp))
-                if (state.running) {
+                DeckButton(
+                    text = "Start mirroring",
+                    icon = Icons.Rounded.Cast,
+                    enabled = ready && hostOn,
+                    onClick = { MirrorSession.start() },
+                )
+                if (state.active) {
+                    Spacer(Modifier.height(6.dp))
                     DeckButton(
                         text = "Stop mirroring",
                         icon = Icons.Rounded.CastConnected,
                         tone = Tone.Danger,
-                        onClick = {
-                            if (CoverDeckService.isRunning) {
-                                CoverDeckService.send(context, CoverDeckService.ACTION_STOP_MIRROR)
-                            }
-                            model.mirror.stop()
-                        },
+                        filled = false,
+                        onClick = { model.stopMirror() },
                     )
-                } else {
-                    DeckButton(
-                        text = "Start mirroring",
-                        icon = Icons.Rounded.Cast,
-                        enabled = model.hasOverlayPermission(),
-                        onClick = {
-                            CoverDeckService.send(context, CoverDeckService.ACTION_START_MIRROR)
-                        },
-                    )
-                    if (!model.hasOverlayPermission()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Needs \"Display over other apps\" — grant it in Setup.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = DeckColors.Warning,
-                        )
-                    }
                 }
             }
         }
@@ -657,15 +651,11 @@ fun MirrorPage(model: DeckViewModel) {
         Spacer(Modifier.height(10.dp))
         DeckCard {
             Column {
-                InfoRow("Source", "${main.widthPx} × ${main.heightPx} (display ${main.displayId})")
-                InfoRow("Mirror buffer", "$vw × $vh")
-                InfoRow("Engine", state.engine, tone = if (state.running) Tone.Active else Tone.Neutral)
                 InfoRow(
-                    "Device state",
-                    state.availableStates.firstOrNull { it.first == state.overriddenState }?.second
-                        ?: "not overridden",
-                    tone = if (state.overriddenState != null) Tone.Warning else Tone.Neutral,
+                    "Inner screen while mirroring",
+                    if (state.sourceWidth > 0) "${state.sourceWidth} × ${state.sourceHeight}" else "—",
                 )
+                InfoRow("Engine", state.engine, tone = if (state.streaming) Tone.Active else Tone.Neutral)
                 state.lastError?.let {
                     Text(
                         it,
@@ -674,6 +664,30 @@ fun MirrorPage(model: DeckViewModel) {
                         modifier = Modifier.padding(top = 6.dp),
                     )
                 }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        DeckCard {
+            Column {
+                Text(
+                    "Continuity",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = DeckColors.TextPrimary,
+                )
+                Text(
+                    "Or move a single app onto the cover screen so it runs there natively, " +
+                        "with no mirroring needed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DeckColors.TextSecondary,
+                    modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),
+                )
+                DeckButton(
+                    text = "Pick an app to move",
+                    icon = Icons.AutoMirrored.Rounded.OpenInNew,
+                    filled = false,
+                    onClick = { model.navigate(DeckRoute.Recents) },
+                )
             }
         }
     }

@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import android.view.Display
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -514,6 +515,119 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
         val component = intent.component?.flattenToShortString() ?: return false
         val out = Hidden.sh("am start --display $displayId --activity-no-animation -n $component")
         return !out.contains("Error", ignoreCase = true)
+    }
+
+    // =====================================================================
+    // Display geometry
+    // =====================================================================
+
+    /**
+     * Sizes straight from the window manager. The app cannot measure the inner display
+     * itself while folded: it is *disabled* then, so DisplayManager omits it and the
+     * metrics the app got instead produced a 1282x1234 "inner screen", which is why the
+     * first mirror was mis-scaled and taps landed too high.
+     */
+    override fun getDisplaySizes(displayId: Int): IntArray {
+        val wm = Hidden.windowManager
+        val initial = android.graphics.Point()
+        val current = android.graphics.Point()
+        val gotInitial = Hidden.callVoid(
+            wm, "getInitialDisplaySize",
+            Hidden.sig(Int::class.java, android.graphics.Point::class.java) to Hidden.args(displayId, initial),
+        )
+        val gotCurrent = Hidden.callVoid(
+            wm, "getBaseDisplaySize",
+            Hidden.sig(Int::class.java, android.graphics.Point::class.java) to Hidden.args(displayId, current),
+        )
+        if (gotInitial && gotCurrent && initial.x > 0 && current.x > 0) {
+            return intArrayOf(initial.x, initial.y, current.x, current.y)
+        }
+        // "Physical size: 1080x2640" and, when forced, "Override size: 1080x1040".
+        val out = Hidden.sh("wm size -d $displayId")
+        fun parse(label: String) = Regex("$label size:\\s*(\\d+)x(\\d+)").find(out)
+            ?.groupValues?.let { it[1].toInt() to it[2].toInt() }
+        val physical = parse("Physical") ?: (0 to 0)
+        val override = parse("Override") ?: physical
+        return intArrayOf(physical.first, physical.second, override.first, override.second)
+    }
+
+    override fun setDisplaySize(displayId: Int, width: Int, height: Int) {
+        val done = Hidden.callVoid(
+            Hidden.windowManager, "setForcedDisplaySize",
+            Hidden.sig(Int::class.java, Int::class.java, Int::class.java) to Hidden.args(displayId, width, height),
+        )
+        if (!done) Hidden.sh("wm size ${width}x$height -d $displayId")
+    }
+
+    override fun resetDisplaySize(displayId: Int) {
+        val done = Hidden.callVoid(
+            Hidden.windowManager, "clearForcedDisplaySize",
+            Hidden.sig(Int::class.java) to Hidden.args(displayId),
+        )
+        if (!done) Hidden.sh("wm size reset -d $displayId")
+    }
+
+    // =====================================================================
+    // Mirror
+    // =====================================================================
+
+    /**
+     * Injects a whole MotionEvent (all pointers, pressure, history) rather than a single
+     * rebuilt point, so pinch-zoom and two-finger gestures work through the mirror.
+     */
+    override fun injectMotionEvent(event: MotionEvent, targetDisplayId: Int) {
+        event.source = InputDevice.SOURCE_TOUCHSCREEN
+        runCatching {
+            MotionEvent::class.java.getMethod("setDisplayId", Int::class.java).invoke(event, targetDisplayId)
+        }
+        try {
+            inject(event)
+        } finally {
+            event.recycle()
+        }
+    }
+
+    override fun setInnerDisplayAwake(awake: Boolean): Boolean {
+        if (awake) return acquireAwakeState()
+        if (getCurrentDeviceState() == 0) return true
+        val wasInteractive = isInteractive()
+        resetDeviceState()
+        // Dropping back to CLOSED while the screen is on counts as folding the phone, and
+        // One UI puts it to sleep ("device_folded"). Mirroring was stopped on purpose, so
+        // wake the cover straight back up rather than leave the user at a dark screen.
+        if (wasInteractive) {
+            val deadline = SystemClock.uptimeMillis() + 1_500
+            while (isInteractive() && SystemClock.uptimeMillis() < deadline) Thread.sleep(40)
+            if (!isInteractive()) injectKey(KeyEvent.KEYCODE_WAKEUP, Display.DEFAULT_DISPLAY)
+        }
+        return true
+    }
+
+    private fun isInteractive(): Boolean {
+        val power = Hidden.binder("power")?.let { Hidden.stub("android.os.IPowerManager", it) }
+        return power?.let { runCatching { it.javaClass.getMethod("isInteractive").invoke(it) as Boolean }.getOrNull() }
+            ?: Hidden.sh("dumpsys power").contains("mWakefulness=Awake")
+    }
+
+    /**
+     * Keeps the inner display powered while folded: CONCURRENT_INNER_DEFAULT (both panels
+     * on) when the firmware offers it, else OPENED. Waits for the state to commit, because
+     * mirroring a display that is still disabled yields a black picture.
+     */
+    private fun acquireAwakeState(): Boolean {
+        val states = getDeviceStates().mapNotNull { raw ->
+            val parts = raw.split(":", limit = 2)
+            parts[0].toIntOrNull()?.let { it to parts.getOrElse(1) { "" } }
+        }
+        val target = states.firstOrNull { it.second.contains("CONCURRENT", ignoreCase = true) }?.first
+            ?: states.firstOrNull { it.second.equals("OPENED", ignoreCase = true) }?.first
+            ?: return false
+        requestDeviceState(target)
+        val deadline = SystemClock.uptimeMillis() + 2_000
+        while (getCurrentDeviceState() != target && SystemClock.uptimeMillis() < deadline) {
+            Thread.sleep(50)
+        }
+        return getCurrentDeviceState() == target
     }
 
     override fun startNavWatcher(listener: INavGestureListener) = navWatcher.start(listener)

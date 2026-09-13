@@ -6,10 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.hardware.display.DisplayManager
 import android.os.IBinder
-import android.util.Log
-import android.view.WindowManager
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.raihan.coverdeck.MainActivity
@@ -17,8 +14,8 @@ import com.raihan.coverdeck.R
 import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.CoverAutoRotator
-import com.raihan.coverdeck.feature.MirrorController
 import com.raihan.coverdeck.feature.RotationController
+import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.nav.HomeLongPress
 import com.raihan.coverdeck.nav.HomeLongPressWatcher
 import com.raihan.coverdeck.privileged.Privileged
@@ -27,42 +24,23 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /**
- * Hosts the long-running cover features: auto-rotate, the Home long-press watcher and
- * the mirror.
+ * Hosts the long-running cover features that need no screen of their own: auto-rotate and
+ * the Home long-press watcher.
  *
- * A foreground service because the mirror must stay pinned to display 1 while the
- * device state is overridden, and the rotation loop and Home watcher must outlive the
- * app UI. Recents itself is an activity opened by [RecentsPanel]. The service stops
- * itself as soon as none of its features is running.
+ * Recents (an activity) and the mirror (a helper-owned window) are only launched from its
+ * notification. It stops itself as soon as neither hosted feature
+ * is running.
  */
 class CoverDeckService : LifecycleService() {
 
-    private lateinit var coverWindowContext: Context
-    private lateinit var mirror: MirrorController
-
-    private var mirrorOverlay: MirrorOverlay? = null
     private var autoRotator: CoverAutoRotator? = null
     private var homeWatcher: HomeLongPressWatcher? = null
 
     private val coverPanel get() = Displays.cover(this)
-    private val mainPanel get() = Displays.main(this)
 
     override fun onCreate() {
         super.onCreate()
         isRunning = true
-        mirror = MirrorController(this)
-
-        // Windows are bound to a display through their context, so build one for the
-        // cover panel up front and add the mirror through it.
-        val display = getSystemService(DisplayManager::class.java)?.getDisplay(coverPanel.displayId)
-        coverWindowContext = if (display != null) {
-            createDisplayContext(display)
-                .createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
-        } else {
-            Log.w(TAG, "cover display not reported; falling back to the default display")
-            createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
-        }
-
         startForeground(NOTIFICATION_ID, buildNotification())
 
         // Restore whatever was on when the process last died.
@@ -89,8 +67,7 @@ class CoverDeckService : LifecycleService() {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             ACTION_SHOW_RECENTS -> RecentsPanel.toggle(this)
-            ACTION_START_MIRROR -> startMirror()
-            ACTION_STOP_MIRROR -> stopMirror()
+            ACTION_START_MIRROR -> MirrorSession.start()
             ACTION_AUTO_ROTATE_ON -> startAutoRotate()
             ACTION_AUTO_ROTATE_OFF -> stopAutoRotate()
             ACTION_HOME_LONGPRESS_ON -> startHomeWatcher()
@@ -106,7 +83,7 @@ class CoverDeckService : LifecycleService() {
         return null
     }
 
-    // ---- auto-rotate --------------------------------------------------------
+    // ---- auto-rotate ------------------------------------------------------------
 
     private fun startAutoRotate() {
         if (autoRotator == null) {
@@ -119,7 +96,7 @@ class CoverDeckService : LifecycleService() {
         autoRotator = null
     }
 
-    // ---- Home long-press ----------------------------------------------------
+    // ---- Home long-press --------------------------------------------------------
 
     private fun startHomeWatcher() {
         if (homeWatcher == null) {
@@ -132,44 +109,15 @@ class CoverDeckService : LifecycleService() {
         homeWatcher = null
     }
 
-    // ---- mirror -------------------------------------------------------------
-
-    private fun startMirror() {
-        if (mirrorOverlay?.isShowing == true) return
-        mirror.refresh()
-        if (!mirror.keepInnerDisplayAwake()) {
-            Log.e(TAG, "could not force an open device state; mirror would capture a dark panel")
-            return
-        }
-        val overlay = MirrorOverlay(
-            windowContext = coverWindowContext,
-            controller = mirror,
-            coverPanel = coverPanel,
-            sourcePanel = mainPanel,
-            onClosed = {
-                mirrorOverlay = null
-                stopIfIdle()
-            },
-        )
-        mirrorOverlay = overlay
-        overlay.show(mirror.state.value.fitMode)
-    }
-
-    private fun stopMirror() {
-        mirrorOverlay?.hide()
-        mirrorOverlay = null
-        mirror.stop(alsoReleaseDeviceState = true)
-    }
-
-    // ---- lifecycle ----------------------------------------------------------
+    // ---- lifecycle ----------------------------------------------------------------
 
     /**
      * The notification's Stop. Turning auto-rotate off must also hand the cover back to
      * the system, or it would stay frozen at whatever angle it was last pointing.
      */
     private fun stopEverything() {
-        stopMirror()
         RecentsPanel.hide()
+        lifecycleScope.launch(MirrorSession.worker) { MirrorSession.end() }
         if (AutoRotate.enabled.value) {
             RotationController.apply(coverPanel.displayId, RotationController.Mode.SYSTEM)
         }
@@ -181,14 +129,12 @@ class CoverDeckService : LifecycleService() {
 
     /** Nothing left to host means no reason to hold a foreground notification. */
     private fun stopIfIdle() {
-        if (autoRotator == null && homeWatcher == null && mirrorOverlay?.isShowing != true) stopSelf()
+        if (autoRotator == null && homeWatcher == null) stopSelf()
     }
 
     override fun onDestroy() {
-        // Leaving a device-state override or a mirror running after the service dies
-        // would strand the phone, so tear the mirror down unconditionally. The
-        // auto-rotate *setting* survives; only the sensor registration is released.
-        stopMirror()
+        // The feature *settings* survive; only the sensor and log-reader registrations
+        // are released here.
         autoRotator?.stop()
         autoRotator = null
         homeWatcher?.stop()
@@ -201,7 +147,7 @@ class CoverDeckService : LifecycleService() {
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Cover screen controls", NotificationManager.IMPORTANCE_MIN)
-                .apply { description = "Keeps cover auto-rotate, Home long-press and the mirror running." },
+                .apply { description = "Keeps cover auto-rotate and Home long-press running." },
         )
 
         fun action(label: String, intentAction: String) = Notification.Action.Builder(
@@ -230,13 +176,11 @@ class CoverDeckService : LifecycleService() {
     }
 
     companion object {
-        private const val TAG = "CoverDeck/Service"
         private const val CHANNEL_ID = "coverdeck_controls"
         private const val NOTIFICATION_ID = 4201
 
         const val ACTION_SHOW_RECENTS = "com.raihan.coverdeck.SHOW_RECENTS"
         const val ACTION_START_MIRROR = "com.raihan.coverdeck.START_MIRROR"
-        const val ACTION_STOP_MIRROR = "com.raihan.coverdeck.STOP_MIRROR"
         const val ACTION_AUTO_ROTATE_ON = "com.raihan.coverdeck.AUTO_ROTATE_ON"
         const val ACTION_AUTO_ROTATE_OFF = "com.raihan.coverdeck.AUTO_ROTATE_OFF"
         const val ACTION_HOME_LONGPRESS_ON = "com.raihan.coverdeck.HOME_LONGPRESS_ON"

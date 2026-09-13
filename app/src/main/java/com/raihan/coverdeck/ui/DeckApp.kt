@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.raihan.coverdeck.feature.RotationController
+import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.privileged.Privileged
 import com.raihan.coverdeck.ui.theme.DeckColors
 
@@ -77,7 +78,7 @@ private fun HomeScreen(model: DeckViewModel) {
     val panel = if (target == Target.Cover) cover else main
     val rotation by model.rotationState(panel.displayId).collectAsState()
     val densityState by model.density.state.collectAsState()
-    val mirrorState by model.mirror.state.collectAsState()
+    val mirrorState by MirrorSession.state.collectAsState()
 
     val ready = status is Privileged.Status.Ready
 
@@ -169,8 +170,12 @@ private fun HomeScreen(model: DeckViewModel) {
                 DeckTile(
                     icon = Icons.Rounded.Cast,
                     title = "Mirror",
-                    status = if (mirrorState.running) "On · ${mirrorState.engine}" else "Inner screen",
-                    active = mirrorState.running,
+                    status = when {
+                        mirrorState.streaming -> "Live"
+                        mirrorState.active -> "Paused"
+                        else -> "Inner screen"
+                    },
+                    active = mirrorState.active,
                     enabled = ready,
                     onClick = { model.navigate(DeckRoute.Mirror) },
                 )

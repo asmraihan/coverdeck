@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Window hosting only. No key filtering, no window content, and the one event type
+  declared (announcements) is ignored; the service exists so the mirror can use an
+  accessibility overlay window on the cover.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAnnouncement"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="false"
+    android:notificationTimeout="0"
+    android:description="@string/mirror_host_description"
+    android:summary="@string/mirror_host_summary" />
