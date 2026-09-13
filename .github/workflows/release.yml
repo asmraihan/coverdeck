@@ -15,16 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Restore the signing key
         env:
@@ -39,8 +39,17 @@ jobs:
               exit 1
             fi
           done
-          # Tolerate line breaks and Windows line endings from a pasted value.
-          printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > "$RUNNER_TEMP/release.jks"
+          # Tolerate line breaks, spaces and Windows line endings from a pasted value.
+          if ! printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$RUNNER_TEMP/release.jks" 2>/dev/null; then
+            echo "::error::KEYSTORE_BASE64 is not valid base64 (${#KEYSTORE_BASE64} characters). Copy it again with the PowerShell command in RELEASING.md and update the secret."
+            exit 1
+          fi
+          # Open the key now, so a wrong password or alias is reported here and not as a build failure.
+          if ! keytool -list -keystore "$RUNNER_TEMP/release.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::The key file decoded ($(wc -c < "$RUNNER_TEMP/release.jks") bytes) but did not open with KEYSTORE_PASSWORD and KEY_ALIAS. Check both secrets."
+            exit 1
+          fi
+          echo "Signing key restored: alias $KEY_ALIAS, $(wc -c < "$RUNNER_TEMP/release.jks") bytes."
 
       - name: Build the release APK
         env:
@@ -54,7 +63,7 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "CoverDeck-${GITHUB_REF_NAME}.apk"
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: CoverDeck-${{ github.ref_name }}.apk
           generate_release_notes: true
