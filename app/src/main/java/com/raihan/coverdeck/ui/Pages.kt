@@ -1,7 +1,6 @@
 package com.raihan.coverdeck.ui
 
 import android.content.Intent
-import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,7 +19,7 @@ import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.CastConnected
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -493,40 +492,61 @@ private fun ToggleRow(
 
 @Composable
 fun RecentsPage(model: DeckViewModel) {
-    val entries by model.recents.entries.collectAsState()
-    val loading by model.recents.loading.collectAsState()
-    val kept by model.recents.keptOpen.collectAsState()
-    val cover by model.coverPanel.collectAsState()
-    val main by model.mainPanel.collectAsState()
+    val enabled by model.homeLongPressEnabled.collectAsState()
+    val ready = model.privilegedStatus.collectAsState().value is Privileged.Status.Ready
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
-        DeckHeader(
-            title = "Recents",
-            subtitle = "Long-press the cover's Home button for this anywhere",
-            onBack = model::back,
-            trailing = {
-                DeckButton(
-                    text = "Refresh",
-                    icon = Icons.Rounded.Refresh,
-                    filled = false,
-                    modifier = Modifier.width(112.dp),
-                    onClick = model::refreshRecents,
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        DeckHeader(title = "Recents", subtitle = "Recent apps on the cover screen", onBack = model::back)
+
+        DeckCard {
+            Column {
+                ToggleRow(
+                    label = "Hold Home for recents",
+                    description = when {
+                        !ready -> "Needs Shizuku"
+                        enabled -> "On"
+                        else -> "Off"
+                    },
+                    checked = enabled,
+                    onChange = { if (ready) model.setHomeLongPress(it) },
                 )
-            },
-        )
+                Text(
+                    "Hold the Home button on the cover screen to open recents, then tap Home or " +
+                        "Back to close them. One UI has no recents on the cover, so CoverDeck " +
+                        "adds them. This runs only while the phone is folded with the cover " +
+                        "screen on, and keeps the CoverDeck notification showing.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DeckColors.TextSecondary,
+                    modifier = Modifier.padding(top = 6.dp, bottom = 10.dp),
+                )
+                DeckButton(
+                    text = "Show recents now",
+                    icon = Icons.Rounded.Layers,
+                    enabled = ready,
+                    onClick = model::previewCoverRecents,
+                )
+            }
+        }
 
-        CoverRecents(
-            entries = entries,
-            loading = loading,
-            keptOpen = kept,
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            onOpen = { model.recents.resume(it, cover.displayId) },
-            onClose = { model.recents.close(it) },
-            onCloseAll = { model.recents.closeAll() },
-            onToggleKeepOpen = model.recents::toggleKeepOpen,
-            onAppInfo = { model.recents.openAppInfo(it, cover.displayId) },
-            onOpenOnOtherScreen = { model.recents.resume(it, main.displayId) },
-        )
+        Spacer(Modifier.height(10.dp))
+        DeckCard {
+            Column {
+                Text("Using recents", style = MaterialTheme.typography.titleMedium, color = DeckColors.TextPrimary)
+                Text(
+                    "Swipe sideways to browse and tap an app to open it on the cover. Swipe an " +
+                        "app up to close it. Tap an app's name for App info, Keep open, or " +
+                        "opening it on the other screen.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DeckColors.TextSecondary,
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
+        }
     }
 }
 
@@ -676,17 +696,18 @@ fun MirrorPage(model: DeckViewModel) {
                     color = DeckColors.TextPrimary,
                 )
                 Text(
-                    "Or move a single app onto the cover screen so it runs there natively, " +
-                        "with no mirroring needed.",
+                    "Or run a single app natively on the cover, with no mirroring: open " +
+                        "recents and tap the app.",
                     style = MaterialTheme.typography.bodySmall,
                     color = DeckColors.TextSecondary,
                     modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),
                 )
                 DeckButton(
-                    text = "Pick an app to move",
+                    text = "Open recents",
                     icon = Icons.AutoMirrored.Rounded.OpenInNew,
                     filled = false,
-                    onClick = { model.navigate(DeckRoute.Recents) },
+                    enabled = ready,
+                    onClick = model::previewCoverRecents,
                 )
             }
         }
@@ -699,34 +720,6 @@ fun MirrorPage(model: DeckViewModel) {
 
 @Composable
 fun SetupPage(model: DeckViewModel) = SetupPageContent(model)
-
-/** Setup for the Home long-press: a switch, what it does, and a way to try recents. */
-@Composable
-private fun HomeLongPressCard(model: DeckViewModel, shizukuReady: Boolean) {
-    val enabled by model.homeLongPressEnabled.collectAsState()
-
-    DeckCard {
-        Column {
-            ToggleRow(
-                label = "Home long-press for recents",
-                description = if (enabled) "On" else "Off",
-                checked = enabled,
-                onChange = { if (shizukuReady) model.setHomeLongPress(it) },
-            )
-            Text(
-                "Hold the Home button on the cover screen to open recents. Tap Home or Back to " +
-                    "close them. One UI has no recents on the cover, so CoverDeck provides them. " +
-                    "It works through Shizuku with no accessibility service. It only runs while " +
-                    "the phone is folded with the cover screen on, and it keeps the CoverDeck " +
-                    "notification showing.",
-                style = MaterialTheme.typography.bodySmall,
-                color = DeckColors.TextSecondary,
-                modifier = Modifier.padding(top = 6.dp, bottom = 10.dp),
-            )
-            DeckButton(text = "Try recents now", onClick = model::previewCoverRecents)
-        }
-    }
-}
 
 @Composable
 private fun SetupPageContent(model: DeckViewModel) {
@@ -777,38 +770,6 @@ private fun SetupPageContent(model: DeckViewModel) {
             }
         }
 
-        Spacer(Modifier.height(10.dp))
-        HomeLongPressCard(model, shizukuReady = status is Privileged.Status.Ready)
-
-        Spacer(Modifier.height(10.dp))
-        DeckCard {
-            Column {
-                Text(
-                    "Display over other apps",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = DeckColors.TextPrimary,
-                )
-                Text(
-                    "Required for the mirror window on the cover.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = DeckColors.TextSecondary,
-                    modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),
-                )
-                DeckButton(
-                    text = if (model.hasOverlayPermission()) "Granted" else "Grant permission",
-                    tone = if (model.hasOverlayPermission()) Tone.Success else Tone.Active,
-                    enabled = !model.hasOverlayPermission(),
-                    onClick = {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}"),
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    },
-                )
-            }
-        }
 
         Spacer(Modifier.height(10.dp))
         DeckCard {

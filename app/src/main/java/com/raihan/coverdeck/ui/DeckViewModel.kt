@@ -2,14 +2,12 @@ package com.raihan.coverdeck.ui
 
 import android.app.Application
 import android.content.Context
-import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.core.Panel
 import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.DensityController
-import com.raihan.coverdeck.feature.RecentsController
 import com.raihan.coverdeck.feature.RotationController
 import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.nav.HomeLongPress
@@ -31,7 +29,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     private val context: Context get() = getApplication()
 
     val density = DensityController(context)
-    val recents = RecentsController(context)
 
     val privilegedStatus: StateFlow<Privileged.Status> = Privileged.status
 
@@ -63,11 +60,12 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
 
     fun navigate(route: DeckRoute) {
         _route.value = route
-        if (route == DeckRoute.Recents) refreshRecents()
     }
 
     fun back() {
         _route.value = DeckRoute.Home
+        // Home shows the cover's state, so leave an inner-screen selection behind on its page.
+        if (_target.value != Target.Cover) setTarget(Target.Cover)
     }
 
     fun setTarget(target: Target) {
@@ -109,10 +107,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         RotationController.apply(targetDisplayId, mode, forceAppsToObey)
     }
 
-    fun refreshRecents() {
-        viewModelScope.launch { recents.refresh() }
-    }
-
     fun setHomeLongPress(on: Boolean) {
         if (on) {
             // No overlay permission needed any more: recents is an activity, launched by
@@ -144,8 +138,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         }
         runCatching { CoverDeckService.send(context, action) }
     }
-
-    fun hasOverlayPermission(): Boolean = Settings.canDrawOverlays(context)
 
     fun stopMirror() {
         viewModelScope.launch(MirrorSession.worker) { MirrorSession.end() }

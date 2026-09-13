@@ -60,6 +60,8 @@ fun DeckTile(
     // Fixed height rather than a square: the cover screen is only ~339 dp tall, and
     // square tiles fit barely a row and a half of a two-column grid.
     height: Dp = 92.dp,
+    /** Optional control at the tile's end, e.g. a [TogglePill]; it takes its own taps. */
+    trailing: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val background by animateColorAsState(
@@ -111,6 +113,54 @@ fun DeckTile(
                 color = if (enabled) tone.color() else DeckColors.TextTertiary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(6.dp))
+            trailing()
+        }
+    }
+}
+
+/**
+ * A compact On/Off switch for a tile, so a feature can be flipped without opening its
+ * page. The touch area is larger than the pill so it is easy to hit on the cover.
+ */
+@Composable
+fun TogglePill(
+    checked: Boolean,
+    enabled: Boolean = true,
+    onToggle: (Boolean) -> Unit,
+) {
+    val on = checked && enabled
+    val fill by animateColorAsState(
+        if (on) DeckColors.Accent else DeckColors.SurfaceRaised,
+        label = "pillFill",
+    )
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(enabled = enabled) { onToggle(!checked) }
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(fill)
+                .border(1.dp, if (on) DeckColors.Accent else DeckColors.Outline, CircleShape)
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (checked) "On" else "Off",
+                style = MaterialTheme.typography.labelMedium,
+                color = when {
+                    !enabled -> DeckColors.TextTertiary
+                    checked -> DeckColors.Background
+                    else -> DeckColors.TextSecondary
+                },
+                maxLines = 1,
             )
         }
     }
