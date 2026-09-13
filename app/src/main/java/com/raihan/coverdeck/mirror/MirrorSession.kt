@@ -11,11 +11,14 @@ import com.raihan.coverdeck.privileged.Privileged
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -54,6 +57,8 @@ object MirrorSession {
         val sourceWidth: Int = 0,
         val sourceHeight: Int = 0,
         val lastError: String? = null,
+        /** Keep the inner panel dark while mirroring; it still renders and takes input. */
+        val innerOff: Boolean = false,
     )
 
     private val _state = MutableStateFlow(State())
@@ -74,6 +79,9 @@ object MirrorSession {
     /** The last area the window reported, so a shape change can be applied without it. */
     @Volatile
     private var area: Pair<Int, Int>? = null
+
+    /** Re-applies "inner screen off" while a session runs; see [enforceInnerPanel]. */
+    private var panelKeeper: Job? = null
 
     private val events = object : MirrorWindow.Events {
         override fun onAreaMeasured(width: Int, height: Int) {
@@ -101,6 +109,7 @@ object MirrorSession {
         _state.update {
             it.copy(
                 shape = runCatching { Shape.valueOf(p.getString(KEY_SHAPE, Shape.COVER.name)!!) }.getOrDefault(Shape.COVER),
+                innerOff = p.getBoolean(KEY_INNER_OFF, false),
             )
         }
     }
@@ -123,6 +132,7 @@ object MirrorSession {
                 w.show(cover)
             }
             _state.update { it.copy(active = shown, lastError = if (shown) null else "Could not open the mirror window") }
+            if (shown) startPanelKeeper()
             Log.i(TAG, "mirror ${if (shown) "shown" else "FAILED"} on display $cover")
             // On success the window reports its area next (onAreaMeasured), which sets the
             // inner display's shape and starts the picture.
@@ -133,6 +143,8 @@ object MirrorSession {
 
     /** Stops mirroring and restores every setting the session changed. */
     suspend fun end() {
+        panelKeeper?.cancel()
+        panelKeeper = null
         withContext(Dispatchers.Main) {
             window?.hide()
             window = null
@@ -147,6 +159,41 @@ object MirrorSession {
         }
         area = null
         _state.update { it.copy(active = false, streaming = false, engine = "none", sourceWidth = 0, sourceHeight = 0) }
+    }
+
+    /**
+     * Inner screen off while mirroring, applied live. Only the panel goes dark: the
+     * display keeps rendering, so the mirror, touch from the cover and scrcpy all keep
+     * working. Ending the session needs no undo, because releasing the inner display
+     * turns it off anyway and One UI powers the panel up normally next time.
+     */
+    fun setInnerOff(off: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_INNER_OFF, off)?.apply()
+        _state.update { it.copy(innerOff = off) }
+        if (_state.value.active) {
+            scope.launch { Privileged.with { it.setDisplayPanelOn(Displays.MAIN_ID, !off) } }
+        }
+    }
+
+    /**
+     * Puts the inner panel back to dark if the setting is on. One UI powers the panel up
+     * whenever it wakes the inner display (each session start, and every time the cover
+     * comes back on), so this runs right after those and every few seconds as a backstop.
+     * Call on [worker].
+     */
+    internal fun enforceInnerPanel() {
+        val s = _state.value
+        if (s.active && s.innerOff) Privileged.with { it.setDisplayPanelOn(Displays.MAIN_ID, false) }
+    }
+
+    private fun startPanelKeeper() {
+        panelKeeper?.cancel()
+        panelKeeper = scope.launch {
+            while (isActive) {
+                enforceInnerPanel()
+                delay(PANEL_KEEPER_MS)
+            }
+        }
     }
 
     fun setShape(shape: Shape) {
@@ -279,6 +326,8 @@ object MirrorSession {
     // onto the (broken) inner display, not by the owner, so they are not carried over.
     private const val KEY_SHAPE = "shape_v2"
     private const val KEY_OWNER_PID = "owner_pid"
+    private const val KEY_INNER_OFF = "inner_off"
+    private const val PANEL_KEEPER_MS = 3_000L
     private const val KEY_HELD = "originals_held_v2"
     private const val KEY_SIZE_FORCED = "orig_size_forced"
     private const val KEY_SIZE_W = "orig_size_w"

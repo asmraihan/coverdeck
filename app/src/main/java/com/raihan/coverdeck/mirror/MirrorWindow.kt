@@ -78,7 +78,10 @@ internal class MirrorWindow(
                 // Screen back on. The system drops the awake override while asleep, so
                 // take it again, and only then restart the picture.
                 scope.launch {
-                    withContext(MirrorSession.worker) { Privileged.with { it.setInnerDisplayAwake(true) } }
+                    withContext(MirrorSession.worker) {
+                        Privileged.with { it.setInnerDisplayAwake(true) }
+                        MirrorSession.enforceInnerPanel()
+                    }
                     if (coverOn) {
                         innerReady = true
                         view?.restartStream()

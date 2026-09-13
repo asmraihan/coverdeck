@@ -40,6 +40,7 @@ import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.mirror.MirrorHostService
 import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.feature.RotationController
+import com.raihan.coverdeck.feature.ScreenTimeout
 import com.raihan.coverdeck.privileged.Privileged
 import com.raihan.coverdeck.ui.theme.DeckColors
 
@@ -333,6 +334,74 @@ private fun ToggleRow(
 }
 
 // =========================================================================
+// Screen timeout
+// =========================================================================
+
+@Composable
+fun TimeoutPage(model: DeckViewModel) {
+    val state by ScreenTimeout.state.collectAsState()
+    val ready = model.privilegedStatus.collectAsState().value is Privileged.Status.Ready
+    val everywhere = state.coverSeconds == state.appSeconds
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        DeckHeader(title = "Screen timeout", subtitle = "Cover screen", onBack = model::back)
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ScreenTimeout.options.chunked(3).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { option ->
+                        val selected = everywhere && state.coverSeconds == option.seconds
+                        DeckButton(
+                            text = option.label,
+                            tone = if (selected) Tone.Active else Tone.Neutral,
+                            filled = selected,
+                            enabled = ready,
+                            modifier = Modifier.weight(1f),
+                            onClick = { model.setScreenTimeout(option.seconds) },
+                        )
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        DeckCard {
+            Column {
+                InfoRow("Cover home and quick panel", ScreenTimeout.label(state.coverSeconds))
+                InfoRow("Apps on the cover", ScreenTimeout.label(state.appSeconds))
+                Text(
+                    if (everywhere) {
+                        "One UI keeps a separate timeout for apps; CoverDeck sets both, so the " +
+                            "cover behaves the same everywhere."
+                    } else {
+                        "One UI keeps a separate timeout for apps, and they differ right now. " +
+                            "Pick a time to use it everywhere on the cover."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DeckColors.TextTertiary,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                if (state.stayAwakeWhileCharging) {
+                    Text(
+                        "Stay awake is on in Developer options, so while the phone is charging " +
+                            "the screen never turns off. The timeout applies on battery.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DeckColors.Warning,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
 // Recents
 // =========================================================================
 
@@ -492,6 +561,14 @@ fun MirrorPage(model: DeckViewModel) {
                     state.shape.description,
                     style = MaterialTheme.typography.bodySmall,
                     color = DeckColors.TextTertiary,
+                )
+
+                Spacer(Modifier.height(8.dp))
+                ToggleRow(
+                    label = "Turn off inner screen",
+                    description = "Saves battery. The mirror, touch from the cover and scrcpy keep working",
+                    checked = state.innerOff,
+                    onChange = MirrorSession::setInnerOff,
                 )
 
                 Spacer(Modifier.height(10.dp))
@@ -660,8 +737,8 @@ private fun ResetConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         text = {
             Text(
                 "Stops mirroring, turns off cover auto-rotate and the Home and Back hold " +
-                    "gestures, and puts screen rotation back to how it was before CoverDeck " +
-                    "changed it.",
+                    "gestures, and puts screen rotation and screen timeout back to how they " +
+                    "were before CoverDeck changed them.",
             )
         },
         confirmButton = {

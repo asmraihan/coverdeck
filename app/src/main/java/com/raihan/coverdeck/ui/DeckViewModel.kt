@@ -8,6 +8,7 @@ import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.core.Panel
 import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.RotationController
+import com.raihan.coverdeck.feature.ScreenTimeout
 import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.nav.BackLongPress
 import com.raihan.coverdeck.nav.HomeLongPress
@@ -19,7 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-enum class DeckRoute { Home, Rotation, Recents, Mirror, Setup }
+enum class DeckRoute { Home, Rotation, Recents, Mirror, Timeout, Setup }
 
 /** Which physical panel the Rotation page is pointed at. */
 class DeckViewModel(app: Application) : AndroidViewModel(app) {
@@ -79,6 +80,11 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         _coverPanel.value = Displays.cover(context)
         _mainPanel.value = Displays.main(context)
         RotationController.refresh(_coverPanel.value.displayId)
+        ScreenTimeout.refresh()
+    }
+
+    fun setScreenTimeout(seconds: Int) {
+        if (!ScreenTimeout.apply(seconds)) _notice.value = "Changing the screen timeout needs Shizuku."
     }
 
     /** Cover rotation. The inner screen's is the mirror's business while mirroring. */
@@ -144,9 +150,10 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
             val label = if (panel.displayId == _coverPanel.value.displayId) "cover" else "inner"
             if (RotationController.restoreOriginal(panel.displayId)) undone += "$label rotation"
         }
+        if (ScreenTimeout.restoreOriginal()) undone += "screen timeout"
         refreshDisplayState()
         _notice.value = if (undone.isEmpty()) {
-            "Mirroring and auto-rotate are off. Rotation was never changed."
+            "Mirroring and auto-rotate are off. Rotation and screen timeout were never changed."
         } else {
             "Restored ${undone.joinToString()} to how they were before CoverDeck."
         }

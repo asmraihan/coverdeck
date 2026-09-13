@@ -603,6 +603,20 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
         return true
     }
 
+    override fun setDisplayPanelOn(displayId: Int, on: Boolean): Boolean {
+        val physical = Hidden.physicalDisplayId(displayId)?.toLongOrNull() ?: return false
+        val token = PanelPower.displayToken(physical) ?: return false
+        return runCatching {
+            Class.forName("android.view.SurfaceControl")
+                .getMethod("setDisplayPowerMode", android.os.IBinder::class.java, Int::class.java)
+                .invoke(null, token, if (on) PanelPower.POWER_MODE_NORMAL else PanelPower.POWER_MODE_OFF)
+            true
+        }.getOrElse {
+            Log.w(Hidden.TAG, "setDisplayPowerMode failed: ${it.message}")
+            false
+        }
+    }
+
     private fun isInteractive(): Boolean {
         val power = Hidden.binder("power")?.let { Hidden.stub("android.os.IPowerManager", it) }
         return power?.let { runCatching { it.javaClass.getMethod("isInteractive").invoke(it) as Boolean }.getOrNull() }

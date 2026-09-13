@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.ScreenRotation
+import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.raihan.coverdeck.feature.RotationController
+import com.raihan.coverdeck.feature.ScreenTimeout
 import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.privileged.Privileged
 import com.raihan.coverdeck.ui.theme.DeckColors
@@ -57,6 +59,7 @@ fun DeckApp(model: DeckViewModel) {
             DeckRoute.Rotation -> RotationPage(model)
             DeckRoute.Recents -> RecentsPage(model)
             DeckRoute.Mirror -> MirrorPage(model)
+            DeckRoute.Timeout -> TimeoutPage(model)
             DeckRoute.Setup -> SetupPage(model)
         }
     }
@@ -74,6 +77,7 @@ private fun HomeScreen(model: DeckViewModel) {
     val panel by model.coverPanel.collectAsState()
     val rotation by model.rotationState(panel.displayId).collectAsState()
     val mirrorState by MirrorSession.state.collectAsState()
+    val timeout by ScreenTimeout.state.collectAsState()
 
     val ready = status is Privileged.Status.Ready
 
@@ -151,6 +155,15 @@ private fun HomeScreen(model: DeckViewModel) {
                     active = mirrorState.active,
                     enabled = ready,
                     onClick = { model.navigate(DeckRoute.Mirror) },
+                )
+            }
+            item {
+                DeckTile(
+                    icon = Icons.Rounded.Timer,
+                    title = "Screen timeout",
+                    status = ScreenTimeout.label(timeout.coverSeconds),
+                    enabled = ready,
+                    onClick = { model.navigate(DeckRoute.Timeout) },
                 )
             }
         }

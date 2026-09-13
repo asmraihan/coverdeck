@@ -76,4 +76,11 @@ interface IPrivilegedService {
      * sleep. Returns whether the requested state is in effect.
      */
     boolean setInnerDisplayAwake(boolean awake) = 64;
+
+    /**
+     * Switches a display's panel on or off at the SurfaceFlinger level, as scrcpy's
+     * "turn screen off" does: the display stays awake and keeps rendering (so it can
+     * still be mirrored and controlled), only the physical panel goes dark.
+     */
+    boolean setDisplayPanelOn(int displayId, boolean on) = 65;
 }

@@ -3,6 +3,7 @@ package com.raihan.coverdeck
 import android.app.Application
 import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.RotationController
+import com.raihan.coverdeck.feature.ScreenTimeout
 import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.nav.BackLongPress
 import com.raihan.coverdeck.nav.HomeLongPress
@@ -19,5 +20,6 @@ class CoverDeckApp : Application() {
         HomeLongPress.init(this)
         BackLongPress.init(this)
         MirrorSession.init(this)
+        ScreenTimeout.init(this)
     }
 }
