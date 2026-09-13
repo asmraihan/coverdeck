@@ -24,10 +24,12 @@ with its passwords.
    | `KEY_ALIAS` | `coverdeck` |
    | `KEY_PASSWORD` | the key password |
 
-   The base64 text, in PowerShell:
+   The base64 text, in PowerShell. Use the full path: .NET methods don't follow `cd`, so a
+   bare file name is looked up in the folder PowerShell started in. The result is several
+   thousand characters; `(Get-Clipboard).Length` shows it.
 
    ```
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes("coverdeck-release.jks")) | Set-Clipboard
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\keys\coverdeck-release.jks")) | Set-Clipboard
    ```
 
 3. To sign release builds on your own PC too, copy `keystore.properties.example` to
