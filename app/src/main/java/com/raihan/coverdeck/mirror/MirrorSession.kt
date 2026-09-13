@@ -59,6 +59,10 @@ object MirrorSession {
         val lastError: String? = null,
         /** Keep the inner panel dark while mirroring; it still renders and takes input. */
         val innerOff: Boolean = false,
+        /** Leave the inner screen's navigation bar out of the picture; the strip navigates. */
+        val hideNavBar: Boolean = false,
+        /** Pixels cut from the bottom of the inner screen in the picture (its navigation bar). */
+        val cropBottom: Int = 0,
     )
 
     private val _state = MutableStateFlow(State())
@@ -97,6 +101,14 @@ object MirrorSession {
             setShape(shape)
         }
 
+        override fun onHideNavBarSelected(hide: Boolean) {
+            setHideNavBar(hide)
+        }
+
+        override fun onInnerOffSelected(off: Boolean) {
+            setInnerOff(off)
+        }
+
         override fun onStreamChanged(streaming: Boolean, engine: String) {
             _state.update { it.copy(streaming = streaming, engine = engine) }
         }
@@ -110,6 +122,7 @@ object MirrorSession {
             it.copy(
                 shape = runCatching { Shape.valueOf(p.getString(KEY_SHAPE, Shape.COVER.name)!!) }.getOrDefault(Shape.COVER),
                 innerOff = p.getBoolean(KEY_INNER_OFF, false),
+                hideNavBar = p.getBoolean(KEY_HIDE_NAV, false),
             )
         }
     }
@@ -158,7 +171,7 @@ object MirrorSession {
             prefs?.edit()?.remove(KEY_OWNER_PID)?.commit()
         }
         area = null
-        _state.update { it.copy(active = false, streaming = false, engine = "none", sourceWidth = 0, sourceHeight = 0) }
+        _state.update { it.copy(active = false, streaming = false, engine = "none", sourceWidth = 0, sourceHeight = 0, cropBottom = 0) }
     }
 
     /**
@@ -194,6 +207,18 @@ object MirrorSession {
                 delay(PANEL_KEEPER_MS)
             }
         }
+    }
+
+    /**
+     * Hides the inner screen's navigation bar from the mirror, applied live. The bar itself
+     * stays on the inner screen (Android offers no way to remove it from one display only,
+     * and gesture navigation would change the cover's navigation too): the inner screen is
+     * made taller by exactly the bar's height and the picture is cut above it.
+     */
+    fun setHideNavBar(hide: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_HIDE_NAV, hide)?.apply()
+        _state.update { it.copy(hideNavBar = hide) }
+        if (_state.value.active) scope.launch { applyShape() }
     }
 
     fun setShape(shape: Shape) {
@@ -232,33 +257,91 @@ object MirrorSession {
         val sizes = Privileged.with { it.getDisplaySizes(Displays.MAIN_ID) } ?: return
         if (sizes[0] <= 0 || areaW <= 0 || areaH <= 0) return
         holdOriginals()
+        val hideNav = _state.value.hideNavBar
 
-        val source = when (_state.value.shape) {
-            Shape.COVER -> {
-                val width = sizes[0]
-                val height = even(width.toFloat() * areaH / areaW)
-                Privileged.with {
-                    it.setDisplaySize(Displays.MAIN_ID, width, height)
-                    it.setDensity(Displays.MAIN_ID, FIT_DENSITY)
-                }
-                width to height
-            }
-
-            Shape.ORIGINAL -> {
-                restoreSizeAndDensity()
-                val now = Privileged.with { it.getDisplaySizes(Displays.MAIN_ID) } ?: sizes
-                now[2] to now[3]
-            }
-        }
-        // Every shape: upright, whatever the sensor or an app asks for.
+        // Every shape: upright, whatever the sensor or an app asks for. Done first, so the
+        // navigation bar is measured where it will stay: along the bottom.
         Privileged.with {
             it.setIgnoreOrientationRequest(Displays.MAIN_ID, true)
             it.freezeRotation(Displays.MAIN_ID, Surface.ROTATION_0)
         }
 
-        _state.update { it.copy(sourceWidth = source.first, sourceHeight = source.second) }
-        withContext(Dispatchers.Main) { window?.update(source.first, source.second) }
-        Log.i(TAG, "mirroring inner screen at ${source.first}x${source.second} into ${areaW}x$areaH")
+        val width: Int
+        val height: Int
+        var crop = 0
+        when (_state.value.shape) {
+            Shape.COVER -> {
+                width = sizes[0]
+                val visible = even(width.toFloat() * areaH / areaW)
+                // With the bar hidden, the inner screen grows by the bar's height so what is
+                // left above it still has the cover's shape. The height from last time is a
+                // good first guess; the real one is measured and corrected below.
+                crop = if (hideNav) expectedNavBar(FIT_DENSITY) else 0
+                Privileged.with {
+                    it.setDensity(Displays.MAIN_ID, FIT_DENSITY)
+                    it.setDisplaySize(Displays.MAIN_ID, width, visible + crop)
+                }
+                if (hideNav) {
+                    // SystemUI resizes its bar for the new density a moment after the display
+                    // changes, so a first reading can still be the old height (144 px at 480
+                    // dpi instead of 135 at 450). Measure again after each correction until
+                    // the bar and the display agree.
+                    for (attempt in 0 until NAV_FIT_ATTEMPTS) {
+                        val measured = measureNavBar(visible + crop)
+                        if (measured < 0 || measured == crop) break
+                        crop = measured
+                        Privileged.with { it.setDisplaySize(Displays.MAIN_ID, width, visible + crop) }
+                    }
+                    rememberNavBar(crop, FIT_DENSITY)
+                }
+                height = visible + crop
+            }
+
+            Shape.ORIGINAL -> {
+                restoreSizeAndDensity()
+                val now = Privileged.with { it.getDisplaySizes(Displays.MAIN_ID) } ?: sizes
+                width = now[2]
+                height = now[3]
+                if (hideNav) crop = measureNavBar(height).coerceAtLeast(0)
+            }
+        }
+
+        _state.update { it.copy(sourceWidth = width, sourceHeight = height, cropBottom = crop) }
+        withContext(Dispatchers.Main) { window?.update(width, height, crop) }
+        Log.i(TAG, "mirroring inner screen at ${width}x$height, bottom $crop px hidden, into ${areaW}x$areaH")
+    }
+
+    /**
+     * The inner navigation bar's height in pixels, once the window manager has laid the
+     * display out at [displayHeight]. Falls back to the last reading if that takes too long;
+     * -1 when there is no bar to measure.
+     */
+    private suspend fun measureNavBar(displayHeight: Int): Int {
+        var last = -1
+        var steady = 0
+        repeat(NAV_MEASURE_TRIES) {
+            val frame = Privileged.with { it.getNavigationBarFrame(Displays.MAIN_ID) }
+            if (frame != null && frame.size == 4) {
+                val barHeight = frame[3] - frame[1]
+                // Only a bar sitting at the new bottom edge, reading the same height a few
+                // times in a row, has finished resizing.
+                steady = if (frame[3] == displayHeight && barHeight == last) steady + 1 else 0
+                last = barHeight
+                if (steady >= NAV_STEADY_READINGS) return barHeight
+            }
+            delay(NAV_MEASURE_INTERVAL_MS)
+        }
+        Log.w(TAG, "navigation bar never settled at height $displayHeight; using $last px")
+        return last
+    }
+
+    private fun expectedNavBar(density: Int): Int {
+        val dp = prefs?.getFloat(KEY_NAV_DP, 0f) ?: 0f
+        return if (dp > 0f) Math.round(dp * density / 160f) else 0
+    }
+
+    private fun rememberNavBar(px: Int, density: Int) {
+        if (px > 0) prefs?.edit()?.putFloat(KEY_NAV_DP, px * 160f / density)?.apply()
     }
 
     /** Records the inner display's size, density and rotation, once per session. */
@@ -327,6 +410,12 @@ object MirrorSession {
     private const val KEY_SHAPE = "shape_v2"
     private const val KEY_OWNER_PID = "owner_pid"
     private const val KEY_INNER_OFF = "inner_off"
+    private const val KEY_HIDE_NAV = "hide_nav_bar"
+    private const val KEY_NAV_DP = "nav_bar_dp"
+    private const val NAV_MEASURE_TRIES = 30
+    private const val NAV_MEASURE_INTERVAL_MS = 100L
+    private const val NAV_STEADY_READINGS = 3
+    private const val NAV_FIT_ATTEMPTS = 3
     private const val PANEL_KEEPER_MS = 3_000L
     private const val KEY_HELD = "originals_held_v2"
     private const val KEY_SIZE_FORCED = "orig_size_forced"

@@ -565,6 +565,13 @@ fun MirrorPage(model: DeckViewModel) {
 
                 Spacer(Modifier.height(8.dp))
                 ToggleRow(
+                    label = "Hide navigation bar",
+                    description = "More room for apps. Navigate with the strip beside the cameras",
+                    checked = state.hideNavBar,
+                    onChange = MirrorSession::setHideNavBar,
+                )
+                Spacer(Modifier.height(4.dp))
+                ToggleRow(
                     label = "Turn off inner screen",
                     description = "Saves battery. The mirror, touch from the cover and scrcpy keep working",
                     checked = state.innerOff,

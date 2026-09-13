@@ -9,7 +9,10 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -22,8 +25,9 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
-import android.view.animation.DecelerateInterpolator
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
+import androidx.core.graphics.ColorUtils
 import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.privileged.Privileged
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +52,8 @@ internal class MirrorWindow(
         fun onAreaMeasured(width: Int, height: Int)
         fun onStopRequested()
         fun onShapeSelected(shape: MirrorSession.Shape)
+        fun onHideNavBarSelected(hide: Boolean)
+        fun onInnerOffSelected(off: Boolean)
         fun onStreamChanged(streaming: Boolean, engine: String)
     }
 
@@ -141,8 +147,9 @@ internal class MirrorWindow(
         }
     }
 
-    fun update(sourceWidth: Int, sourceHeight: Int) {
-        view?.setSource(sourceWidth, sourceHeight)
+    /** [cropBottom] source pixels at the bottom (the navigation bar) are kept out of view. */
+    fun update(sourceWidth: Int, sourceHeight: Int, cropBottom: Int) {
+        view?.setSource(sourceWidth, sourceHeight, cropBottom)
     }
 
     fun hide() {
@@ -168,6 +175,10 @@ internal class MirrorWindow(
 
         private var sourceWidth = 0
         private var sourceHeight = 0
+        private var cropBottom = 0
+
+        /** The picture's full height on screen; [content] is its visible, uncropped part. */
+        private var surfaceHeight = 0
 
         private val area = Rect()
         private val content = Rect()
@@ -186,15 +197,19 @@ internal class MirrorWindow(
         private var menuProgress = 0f
         private var menuAnimator: ValueAnimator? = null
 
-        /** What a finger went down on inside the menu: 0 or 1 a fit option, 2 stop, -1 nothing. */
+        /** What a finger went down on inside the menu: a quick toggle 0-2, 3 stop, -1 nothing. */
         private var menuPressed = -1
+
+        /** How "on" each quick toggle is drawn, 0..1, so a change fades rather than flips. */
+        private val toggleProgress = FloatArray(TOGGLE_COUNT)
+        private val toggleAnimators = arrayOfNulls<ValueAnimator>(TOGGLE_COUNT)
 
         private val buttons = arrayOf(RectF(), RectF(), RectF(), RectF())
         private val menuRect = RectF()
-        private val segmentTrack = RectF()
-        private val segments = arrayOf(RectF(), RectF())
+        private val toggleCells = Array(TOGGLE_COUNT) { RectF() }
         private val stopRect = RectF()
         private val scratch = RectF()
+        private val path = Path()
 
         private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = TEXT
@@ -207,62 +222,46 @@ internal class MirrorWindow(
         private val pressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(46, 255, 255, 255) }
 
         private val scrimPaint = Paint().apply { color = Color.BLACK }
-        private val menuPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(0x17, 0x1E, 0x2A)
-            setShadowLayer(20 * density, 0f, 8 * density, Color.argb(140, 0, 0, 0))
+        private val blackPaint = Paint().apply { color = Color.BLACK }
+        private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = PANEL
         }
-        private val menuBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(28, 255, 255, 255)
+        private val panelEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = PANEL_EDGE
             style = Paint.Style.STROKE
             strokeWidth = density
         }
-        private val chipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(20, 255, 255, 255) }
+        private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val statusDot = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(16, 255, 255, 255) }
-        private val segmentPressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(22, 255, 255, 255) }
-        private val selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(50, Color.red(ACCENT), Color.green(ACCENT), Color.blue(ACCENT))
-        }
-        private val selectedBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(120, Color.red(ACCENT), Color.green(ACCENT), Color.blue(ACCENT))
-            style = Paint.Style.STROKE
-            strokeWidth = density
-        }
-        private val stopPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(34, Color.red(DANGER), Color.green(DANGER), Color.blue(DANGER))
-        }
-        private val stopPressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(64, Color.red(DANGER), Color.green(DANGER), Color.blue(DANGER))
-        }
         private val glyphStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 1.6f * density
+            strokeWidth = 2f * density
+            strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
         private val glyphFill = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val stopFill = Paint(Paint.ANTI_ALIAS_FLAG)
 
         private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = TEXT
-            textSize = 15f * density
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textSize = 16f * density
+            typeface = Typeface.create(Typeface.DEFAULT, 700, false)
         }
         private val statusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = SUBTLE
-            textSize = 12f * density
+            textSize = 11.5f * density
+            typeface = Typeface.create(Typeface.DEFAULT, 500, false)
         }
-        private val optionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = SUBTLE
-            textSize = 12.5f * density
+        private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT
+            textSize = 10.5f * density
             textAlign = Paint.Align.CENTER
-        }
-        private val optionSelectedPaint = Paint(optionPaint).apply {
-            color = ACCENT_BRIGHT
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            typeface = Typeface.create(Typeface.DEFAULT, 500, false)
         }
         private val stopTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = DANGER
-            textSize = 14f * density
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textSize = 13f * density
+            typeface = Typeface.create(Typeface.DEFAULT, 600, false)
         }
 
         init {
@@ -275,7 +274,7 @@ internal class MirrorWindow(
                 }
 
                 override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
-                    if (w == content.width() && h == content.height()) startStreamIfReady()
+                    if (w == content.width() && h == surfaceHeight) startStreamIfReady()
                 }
 
                 override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -285,10 +284,11 @@ internal class MirrorWindow(
             })
         }
 
-        fun setSource(width: Int, height: Int) {
-            if (width == sourceWidth && height == sourceHeight) return
+        fun setSource(width: Int, height: Int, crop: Int) {
+            if (width == sourceWidth && height == sourceHeight && crop == cropBottom) return
             sourceWidth = width
             sourceHeight = height
+            cropBottom = crop.coerceIn(0, height / 3)
             stopStream()
             layoutContent()
             invalidate()
@@ -327,21 +327,27 @@ internal class MirrorWindow(
             }
 
             if (sourceWidth <= 0 || sourceHeight <= 0) return
-            val scale = min(area.width().toFloat() / sourceWidth, area.height().toFloat() / sourceHeight)
+            // Fit what is meant to be seen; a cropped navigation bar hangs below it, past the
+            // screen edge or under the black drawn over it in dispatchDraw.
+            val visibleHeight = sourceHeight - cropBottom
+            val scale = min(area.width().toFloat() / sourceWidth, area.height().toFloat() / visibleHeight)
             val w = even(sourceWidth * scale)
-            val h = even(sourceHeight * scale)
+            val h = even(visibleHeight * scale)
+            val fullHeight = if (cropBottom > 0) even(sourceHeight * scale) else h
             val left = area.left + (area.width() - w) / 2
             val top = area.top + (area.height() - h) / 2
-            val sizeChanged = w != content.width() || h != content.height()
+            val sizeChanged = w != content.width() || fullHeight != surfaceHeight
             content.set(left, top, left + w, top + h)
+            surfaceHeight = fullHeight
 
             val lp = surfaceView.layoutParams as LayoutParams
-            if (lp.width != w || lp.height != h || lp.leftMargin != left || lp.topMargin != top) {
-                surfaceView.layoutParams = LayoutParams(w, h).apply {
+            if (lp.width != w || lp.height != fullHeight || lp.leftMargin != left || lp.topMargin != top) {
+                surfaceView.layoutParams = LayoutParams(w, fullHeight).apply {
                     leftMargin = left
                     topMargin = top
                 }
-                surfaceView.holder.setFixedSize(w, h)
+                surfaceView.holder.setFixedSize(w, fullHeight)
+                surfaceView.clipBounds = Rect(0, 0, w, h)
             }
             if (!sizeChanged && surfaceReady) startStreamIfReady()
             invalidate()
@@ -421,7 +427,7 @@ internal class MirrorWindow(
             if (streaming || !surfaceReady || !innerReady || content.isEmpty || sourceWidth <= 0) return
             val surface = surfaceView.holder.surface ?: return
             val w = content.width()
-            val h = content.height()
+            val h = surfaceHeight
             streaming = true
             scope.launch {
                 val engine = withContext(MirrorSession.worker) {
@@ -502,7 +508,7 @@ internal class MirrorWindow(
             copy.transform(
                 Matrix().apply {
                     setTranslate(-content.left.toFloat(), -content.top.toFloat())
-                    postScale(sourceWidth.toFloat() / content.width(), sourceHeight.toFloat() / content.height())
+                    postScale(sourceWidth.toFloat() / content.width(), (sourceHeight - cropBottom).toFloat() / content.height())
                 },
             )
             Privileged.with { it.injectMotionEvent(copy, Displays.MAIN_ID) }
@@ -528,23 +534,28 @@ internal class MirrorWindow(
         }
 
         // ---- menu -------------------------------------------------------------------
+        //
+        // One UI's quick panel, in CoverDeck's colours: a floating rounded card with round
+        // quick toggles that fill with the accent when on, and a stop button. Toggles apply
+        // at once and leave the menu open, like the quick panel; a tap outside closes it.
 
         private fun openMenu() {
             menuOpen = true
             menuPressed = -1
-            animateMenu(1f)
+            syncToggles(animate = false)
+            animateMenu(1f, OPEN_MS, OPEN_EASE)
         }
 
         private fun closeMenu() {
             menuPressed = -1
-            animateMenu(0f) { menuOpen = false }
+            animateMenu(0f, CLOSE_MS, CLOSE_EASE) { menuOpen = false }
         }
 
-        private fun animateMenu(target: Float, onEnd: (() -> Unit)? = null) {
+        private fun animateMenu(target: Float, duration: Long, ease: PathInterpolator, onEnd: (() -> Unit)? = null) {
             menuAnimator?.cancel()
             menuAnimator = ValueAnimator.ofFloat(menuProgress, target).apply {
-                duration = if (target > menuProgress) 210L else 150L
-                interpolator = DecelerateInterpolator(2f)
+                this.duration = duration
+                interpolator = ease
                 addUpdateListener {
                     menuProgress = it.animatedValue as Float
                     invalidate()
@@ -567,14 +578,45 @@ internal class MirrorWindow(
 
         override fun onDetachedFromWindow() {
             menuAnimator?.cancel()
+            toggleAnimators.forEach { it?.cancel() }
             super.onDetachedFromWindow()
         }
 
-        private fun menuTarget(x: Float, y: Float): Int = when {
-            segments[0].contains(x, y) -> 0
-            segments[1].contains(x, y) -> 1
-            stopRect.contains(x, y) -> 2
-            else -> -1
+        private fun toggleOn(index: Int): Boolean {
+            val state = MirrorSession.state.value
+            return when (index) {
+                0 -> state.shape == MirrorSession.Shape.COVER
+                1 -> state.hideNavBar
+                else -> state.innerOff
+            }
+        }
+
+        /** Brings the drawn toggles in line with the session, e.g. after a change on the page. */
+        private fun syncToggles(animate: Boolean) {
+            for (i in 0 until TOGGLE_COUNT) {
+                val target = if (toggleOn(i)) 1f else 0f
+                if (toggleProgress[i] == target) continue
+                if (!animate) {
+                    toggleAnimators[i]?.cancel()
+                    toggleProgress[i] = target
+                    continue
+                }
+                if (toggleAnimators[i]?.isRunning == true) continue
+                toggleAnimators[i] = ValueAnimator.ofFloat(toggleProgress[i], target).apply {
+                    duration = TOGGLE_MS
+                    interpolator = OPEN_EASE
+                    addUpdateListener {
+                        toggleProgress[i] = it.animatedValue as Float
+                        invalidate()
+                    }
+                    start()
+                }
+            }
+        }
+
+        private fun menuTarget(x: Float, y: Float): Int {
+            toggleCells.forEachIndexed { i, cell -> if (cell.contains(x, y)) return i }
+            return if (stopRect.contains(x, y)) STOP else -1
         }
 
         private fun onMenuTouch(event: MotionEvent) {
@@ -596,10 +638,9 @@ internal class MirrorWindow(
                     val pressed = menuPressed
                     menuPressed = -1
                     when {
-                        // A tap outside the panel closes it.
                         !menuRect.contains(x, y) -> closeMenu()
                         pressed < 0 || menuTarget(x, y) != pressed -> invalidate()
-                        pressed == 2 -> {
+                        pressed == STOP -> {
                             haptic(HapticFeedbackConstants.CONFIRM)
                             menuAnimator?.cancel()
                             menuOpen = false
@@ -608,7 +649,7 @@ internal class MirrorWindow(
                             events.onStopRequested()
                         }
 
-                        else -> chooseShape(if (pressed == 0) MirrorSession.Shape.COVER else MirrorSession.Shape.ORIGINAL)
+                        else -> flipToggle(pressed)
                     }
                 }
 
@@ -619,22 +660,28 @@ internal class MirrorWindow(
             }
         }
 
-        /** Shows the new choice highlighted for a moment, then gets out of the way. */
-        private fun chooseShape(shape: MirrorSession.Shape) {
-            if (MirrorSession.state.value.shape == shape) {
-                closeMenu()
-                return
-            }
+        private fun flipToggle(index: Int) {
             haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-            events.onShapeSelected(shape)
+            val on = toggleOn(index)
+            when (index) {
+                0 -> events.onShapeSelected(if (on) MirrorSession.Shape.ORIGINAL else MirrorSession.Shape.COVER)
+                1 -> events.onHideNavBarSelected(!on)
+                else -> events.onInnerOffSelected(!on)
+            }
+            syncToggles(animate = true)
             invalidate()
-            postDelayed({ if (menuOpen) closeMenu() }, 260)
         }
 
         // ---- drawing ----------------------------------------------------------------
 
         override fun dispatchDraw(canvas: Canvas) {
             super.dispatchDraw(canvas)
+            if (cropBottom > 0 && surfaceHeight > content.height()) {
+                canvas.drawRect(
+                    content.left.toFloat(), content.bottom.toFloat(),
+                    content.right.toFloat(), (content.top + surfaceHeight).toFloat(), blackPaint,
+                )
+            }
             drawButtons(canvas)
             if (menuOpen) drawMenu(canvas)
         }
@@ -686,101 +733,154 @@ internal class MirrorWindow(
             menuRect.set(l, t, l + w, t + h)
 
             val pad = MENU_PAD * density
-            val trackTop = t + pad + (MENU_HEADER + MENU_GAP) * density
-            segmentTrack.set(l + pad, trackTop, l + w - pad, trackTop + MENU_TRACK * density)
-            val inset = 4 * density
-            segments[0].set(segmentTrack.left + inset, segmentTrack.top + inset, segmentTrack.centerX() - inset / 2, segmentTrack.bottom - inset)
-            segments[1].set(segmentTrack.centerX() + inset / 2, segmentTrack.top + inset, segmentTrack.right - inset, segmentTrack.bottom - inset)
-            val stopTop = segmentTrack.bottom + MENU_GAP * density
+            val togglesTop = t + pad + (MENU_HEADER + MENU_HEADER_GAP) * density
+            val cellWidth = (w - 2 * pad) / TOGGLE_COUNT
+            toggleCells.forEachIndexed { i, cell ->
+                cell.set(l + pad + i * cellWidth, togglesTop, l + pad + (i + 1) * cellWidth, togglesTop + MENU_TOGGLES * density)
+            }
+            val stopTop = togglesTop + (MENU_TOGGLES + MENU_GAP) * density
             stopRect.set(l + pad, stopTop, l + w - pad, stopTop + MENU_STOP * density)
         }
 
         private fun drawMenu(canvas: Canvas) {
             layoutMenu()
+            syncToggles(animate = true)
             val progress = menuProgress
-            scrimPaint.alpha = (110 * progress).toInt()
+            scrimPaint.alpha = (70 * progress).toInt()
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), scrimPaint)
 
-            // Fade and grow out of the ⋯ button.
+            // Grow out of the ⋯ button, as One UI's popups do.
             val anchor = buttons[3]
             val pivotX = anchor.centerX().coerceIn(menuRect.left, menuRect.right)
             val pivotY = anchor.centerY().coerceIn(menuRect.top, menuRect.bottom)
-            val scale = 0.9f + 0.1f * progress
+            val scale = 0.86f + 0.14f * progress
             scratch.set(menuRect)
-            scratch.inset(-32 * density, -32 * density)
+            scratch.inset(-40 * density, -40 * density)
             val saved = canvas.saveLayerAlpha(scratch, (255 * progress).toInt())
             canvas.scale(scale, scale, pivotX, pivotY)
 
-            val radius = 24 * density
-            canvas.drawRoundRect(menuRect, radius, radius, menuPaint)
-            canvas.drawRoundRect(menuRect, radius, radius, menuBorder)
+            val radius = MENU_RADIUS * density
+            canvas.drawRoundRect(menuRect, radius, radius, panelPaint)
+            canvas.drawRoundRect(menuRect, radius, radius, panelEdge)
 
             val pad = MENU_PAD * density
-            val state = MirrorSession.state.value
+            val textLeft = menuRect.left + pad + 4 * density
 
-            // Header: title and a live/paused chip.
-            val headerMid = menuRect.top + pad + MENU_HEADER * density / 2
-            canvas.drawText("Mirroring", menuRect.left + pad + 4 * density, baseline(headerMid, titlePaint), titlePaint)
-            val status = if (streaming) "Live" else "Paused"
-            val chipH = 24 * density
-            val chipW = statusPaint.measureText(status) + 30 * density
-            scratch.set(menuRect.right - pad - chipW, headerMid - chipH / 2, menuRect.right - pad, headerMid + chipH / 2)
-            canvas.drawRoundRect(scratch, chipH / 2, chipH / 2, chipPaint)
+            // Header: a large title and a quiet status line.
+            val titleBaseline = menuRect.top + pad - titlePaint.ascent()
+            canvas.drawText("Mirroring", textLeft, titleBaseline, titlePaint)
+            val statusCenter = titleBaseline + titlePaint.descent() + 10 * density
             statusDot.color = if (streaming) LIVE else PAUSED
-            canvas.drawCircle(scratch.left + 12 * density, headerMid, 3.5f * density, statusDot)
-            canvas.drawText(status, scratch.left + 21 * density, baseline(headerMid, statusPaint), statusPaint)
+            val dotRadius = 3f * density
+            canvas.drawCircle(textLeft + dotRadius, statusCenter, dotRadius, statusDot)
+            canvas.drawText(
+                if (streaming) "Live" else "Paused",
+                textLeft + dotRadius * 2 + 6 * density, baseline(statusCenter, statusPaint), statusPaint,
+            )
 
-            // Fit: two options, the current one highlighted.
-            canvas.drawRoundRect(segmentTrack, 18 * density, 18 * density, trackPaint)
-            val options = arrayOf(MirrorSession.Shape.COVER, MirrorSession.Shape.ORIGINAL)
-            options.forEachIndexed { i, option ->
-                val r = segments[i]
-                val selected = option == state.shape
-                val corner = 14 * density
-                when {
-                    selected -> {
-                        canvas.drawRoundRect(r, corner, corner, selectedPaint)
-                        canvas.drawRoundRect(r, corner, corner, selectedBorder)
-                    }
-
-                    menuPressed == i -> canvas.drawRoundRect(r, corner, corner, segmentPressPaint)
-                }
-                drawShapeGlyph(canvas, option, r.centerX(), r.top + r.height() * 0.36f, selected)
-                canvas.drawText(option.label, r.centerX(), r.top + r.height() * 0.8f, if (selected) optionSelectedPaint else optionPaint)
+            // Quick toggles.
+            val circleRadius = TOGGLE_CIRCLE * density / 2
+            toggleCells.forEachIndexed { i, cell ->
+                val on = toggleProgress[i]
+                val pressed = menuPressed == i
+                val cx = cell.centerX()
+                val cy = cell.top + circleRadius
+                val tileColor = ColorUtils.blendARGB(TOGGLE_OFF, TOGGLE_ON, on)
+                circlePaint.color = tileColor
+                canvas.drawCircle(cx, cy, circleRadius * (if (pressed) 0.92f else 1f), circlePaint)
+                if (pressed) canvas.drawCircle(cx, cy, circleRadius * 0.92f, pressPaint)
+                drawToggleIcon(canvas, i, cx, cy, ColorUtils.blendARGB(ICON_OFF, Color.WHITE, on))
+                drawLabel(canvas, TOGGLE_LABELS[i], cx, cy + circleRadius + 6 * density, cell.width() - 8 * density)
             }
 
-            // Stop.
-            val stopCorner = 16 * density
-            canvas.drawRoundRect(stopRect, stopCorner, stopCorner, if (menuPressed == 2) stopPressedPaint else stopPaint)
+            // Stop: One UI's destructive button, a neutral pill with red text.
+            val stopRadius = stopRect.height() / 2
+            stopFill.color = if (menuPressed == STOP) STOP_PRESSED else TOGGLE_OFF
+            canvas.drawRoundRect(stopRect, stopRadius, stopRadius, stopFill)
             val label = "Stop mirroring"
-            val icon = 11 * density
-            val gap = 9 * density
+            val icon = 9 * density
+            val gap = 8 * density
             val startX = stopRect.centerX() - (icon + gap + stopTextPaint.measureText(label)) / 2
             glyphFill.color = DANGER
             scratch.set(startX, stopRect.centerY() - icon / 2, startX + icon, stopRect.centerY() + icon / 2)
-            canvas.drawRoundRect(scratch, 2.5f * density, 2.5f * density, glyphFill)
+            canvas.drawRoundRect(scratch, 2f * density, 2f * density, glyphFill)
             canvas.drawText(label, startX + icon + gap, baseline(stopRect.centerY(), stopTextPaint), stopTextPaint)
 
             canvas.restoreToCount(saved)
         }
 
-        /** A cover-shaped frame, either filled (fit to cover) or with a narrow strip (original). */
-        private fun drawShapeGlyph(canvas: Canvas, shape: MirrorSession.Shape, cx: Float, cy: Float, selected: Boolean) {
-            val color = if (selected) ACCENT_BRIGHT else SUBTLE
-            glyphStroke.color = color
-            val w = 22 * density
-            val h = 18 * density
-            scratch.set(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
-            canvas.drawRoundRect(scratch, 4 * density, 4 * density, glyphStroke)
-            val inset = 3.5f * density
-            if (shape == MirrorSession.Shape.COVER) {
-                scratch.inset(inset, inset)
-            } else {
-                scratch.set(cx - 3.5f * density, cy - h / 2 + inset, cx + 3.5f * density, cy + h / 2 - inset)
+        /** Centred, wrapped to two lines at most, as quick panel labels are. */
+        private fun drawLabel(canvas: Canvas, text: String, cx: Float, top: Float, maxWidth: Float) {
+            val lines = mutableListOf<String>()
+            var line = ""
+            for (word in text.split(" ")) {
+                val candidate = if (line.isEmpty()) word else "$line $word"
+                if (labelPaint.measureText(candidate) <= maxWidth || line.isEmpty()) {
+                    line = candidate
+                } else {
+                    lines += line
+                    line = word
+                }
             }
-            glyphFill.color = color
-            glyphFill.alpha = if (selected) 220 else 140
-            canvas.drawRoundRect(scratch, 2 * density, 2 * density, glyphFill)
+            if (line.isNotEmpty()) lines += line
+            val lineHeight = labelPaint.fontSpacing
+            lines.take(2).forEachIndexed { i, l ->
+                canvas.drawText(l, cx, top - labelPaint.ascent() + i * lineHeight, labelPaint)
+            }
+        }
+
+        private fun drawToggleIcon(canvas: Canvas, index: Int, cx: Float, cy: Float, color: Int) {
+            val stroke = 1.7f * density
+            glyphStroke.color = color
+            glyphStroke.strokeWidth = stroke
+            when (index) {
+                0 -> {
+                    // Fit to cover: the four corners of a frame.
+                    val hx = 8.5f * density
+                    val hy = 7f * density
+                    val len = 4f * density
+                    path.reset()
+                    for (sx in intArrayOf(-1, 1)) for (sy in intArrayOf(-1, 1)) {
+                        val x = cx + sx * hx
+                        val y = cy + sy * hy
+                        path.moveTo(x, y - sy * len)
+                        path.lineTo(x, y)
+                        path.lineTo(x - sx * len, y)
+                    }
+                    canvas.drawPath(path, glyphStroke)
+                }
+
+                1 -> {
+                    // Hide nav bar: a phone whose bottom bar is dotted away.
+                    val hw = 6f * density
+                    val hh = 8.5f * density
+                    scratch.set(cx - hw, cy - hh, cx + hw, cy + hh)
+                    canvas.drawRoundRect(scratch, 2.5f * density, 2.5f * density, glyphStroke)
+                    val barY = cy + hh - 3.6f * density
+                    glyphFill.color = color
+                    for (k in -1..1) canvas.drawCircle(cx + k * 2.6f * density, barY, 0.9f * density, glyphFill)
+                }
+
+                else -> {
+                    // Inner screen off: a phone with a line through it.
+                    val hw = 6f * density
+                    val hh = 8.5f * density
+                    val x0 = cx - hw - 2.4f * density
+                    val y0 = cy - hh - 0.8f * density
+                    val x1 = cx + hw + 2.4f * density
+                    val y1 = cy + hh + 0.8f * density
+                    val layer = canvas.saveLayer(x0 - 4 * density, y0 - 4 * density, x1 + 4 * density, y1 + 4 * density, null)
+                    scratch.set(cx - hw, cy - hh, cx + hw, cy + hh)
+                    canvas.drawRoundRect(scratch, 2.5f * density, 2.5f * density, glyphStroke)
+                    glyphStroke.xfermode = CLEAR
+                    glyphStroke.strokeWidth = 4.2f * density
+                    canvas.drawLine(x0, y0, x1, y1, glyphStroke)
+                    glyphStroke.xfermode = null
+                    glyphStroke.strokeWidth = stroke
+                    canvas.drawLine(x0, y0, x1, y1, glyphStroke)
+                    canvas.restoreToCount(layer)
+                }
+            }
         }
 
         private fun baseline(centerY: Float, paint: Paint) = centerY - (paint.descent() + paint.ascent()) / 2
@@ -795,18 +895,43 @@ internal class MirrorWindow(
         val TEXT = Color.rgb(0xE8, 0xED, 0xF5)
         val SUBTLE = Color.rgb(0x95, 0xA2, 0xB5)
         val ACCENT = Color.rgb(0x5B, 0x9D, 0xFF)
-        val ACCENT_BRIGHT = Color.rgb(0x8F, 0xBC, 0xFF)
         val DANGER = Color.rgb(0xFF, 0x6B, 0x6B)
         val LIVE = Color.rgb(0x4A, 0xDE, 0x80)
         val PAUSED = Color.rgb(0xF5, 0xB7, 0x4A)
 
+        // Menu surfaces, after One UI's quick panel in dark mode: a see-through dark sheet over
+        // whatever is behind it, frosted white tiles, and CoverDeck's accent for what is on.
+        // (Real blur isn't available: the picture is a separate SurfaceView layer, and this
+        // phone has cross-window blur switched off.)
+        val PANEL = Color.argb(150, 0x06, 0x09, 0x10)
+        val PANEL_EDGE = Color.argb(38, 255, 255, 255)
+        val TOGGLE_OFF = Color.argb(44, 255, 255, 255)
+        val TOGGLE_ON = Color.argb(215, 0x5B, 0x9D, 0xFF)
+        val STOP_PRESSED = Color.argb(80, 255, 255, 255)
+        val ICON_OFF = Color.rgb(0xEE, 0xF2, 0xF8)
+
         // Menu geometry, dp.
-        const val MENU_WIDTH = 264f
+        const val MENU_WIDTH = 232f
+        const val MENU_RADIUS = 24f
         const val MENU_PAD = 14f
-        const val MENU_HEADER = 34f
+        const val MENU_HEADER = 36f
+        const val MENU_HEADER_GAP = 10f
+        const val MENU_TOGGLES = 76f
         const val MENU_GAP = 10f
-        const val MENU_TRACK = 64f
-        const val MENU_STOP = 44f
-        val MENU_HEIGHT = MENU_PAD + MENU_HEADER + MENU_GAP + MENU_TRACK + MENU_GAP + MENU_STOP + MENU_PAD
+        const val MENU_STOP = 40f
+        const val TOGGLE_CIRCLE = 44f
+        val MENU_HEIGHT = MENU_PAD + MENU_HEADER + MENU_HEADER_GAP + MENU_TOGGLES + MENU_GAP + MENU_STOP + MENU_PAD
+
+        const val TOGGLE_COUNT = 3
+        const val STOP = 3
+        val TOGGLE_LABELS = arrayOf("Fit to cover", "Hide nav bar", "Inner screen off")
+        val CLEAR = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+
+        // Motion, close to One UI's easing: quick to start, long gentle settle.
+        const val OPEN_MS = 280L
+        const val CLOSE_MS = 170L
+        const val TOGGLE_MS = 180L
+        val OPEN_EASE = PathInterpolator(0.22f, 0.25f, 0f, 1f)
+        val CLOSE_EASE = PathInterpolator(0.33f, 0f, 0.67f, 1f)
     }
 }

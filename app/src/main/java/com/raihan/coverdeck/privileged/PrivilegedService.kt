@@ -617,6 +617,16 @@ class PrivilegedService(private val context: Context?) : IPrivilegedService.Stub
         }
     }
 
+    override fun getNavigationBarFrame(displayId: Int): IntArray {
+        val dump = Hidden.sh("dumpsys window displays")
+        val header = Regex("Display: mDisplayId=$displayId(?!\\d)").find(dump) ?: return IntArray(0)
+        val next = dump.indexOf("Display: mDisplayId=", header.range.last)
+        val section = dump.substring(header.range.first, if (next < 0) dump.length else next)
+        val frame = Regex("type=navigationBars frame=\\[(-?\\d+),(-?\\d+)]\\[(-?\\d+),(-?\\d+)]").find(section)
+            ?: return IntArray(0)
+        return frame.groupValues.drop(1).map { it.toInt() }.toIntArray()
+    }
+
     private fun isInteractive(): Boolean {
         val power = Hidden.binder("power")?.let { Hidden.stub("android.os.IPowerManager", it) }
         return power?.let { runCatching { it.javaClass.getMethod("isInteractive").invoke(it) as Boolean }.getOrNull() }

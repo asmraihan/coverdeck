@@ -83,4 +83,10 @@ interface IPrivilegedService {
      * still be mirrored and controlled), only the physical panel goes dark.
      */
     boolean setDisplayPanelOn(int displayId, boolean on) = 65;
+
+    /**
+     * The navigation bar's frame on a display as {left, top, right, bottom}, from the
+     * window manager's insets state; empty when the display has none.
+     */
+    int[] getNavigationBarFrame(int displayId) = 66;
 }
