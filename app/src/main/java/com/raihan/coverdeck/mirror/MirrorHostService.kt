@@ -13,8 +13,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Hosts the mirror window. It observes nothing and filters no keys; it exists only
- * because an accessibility overlay is the one window type that fits the job:
+ * Hosts the mirror window, and [com.raihan.coverdeck.overlay.CoverHud]'s confirmations. It
+ * observes nothing and filters no keys; it exists only because an accessibility overlay is
+ * the one window type that fits the job:
  *
  *  - An app overlay is force-hidden on every display whenever a Settings screen is
  *    visible (so opening Settings through the mirror blanked the mirror) and it sits

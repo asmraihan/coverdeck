@@ -6,6 +6,9 @@ import android.os.SystemClock
 import android.util.Log
 import com.raihan.coverdeck.INavGestureListener
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * Notices the cover navigation bar's Home long press by reading SystemUI's own log.
@@ -20,6 +23,13 @@ import java.util.Locale
  *    `KeyButtonView: injectInputEvent - 3`, and when the hold reaches the long-press
  *    timeout while folded, the window manager logs
  *    `PhoneWindowManagerExt: Home long press is blocked due to folded state`.
+ *
+ * The Back button is different: it doesn't inject a key but drives predictive back, and
+ * SystemUI logs `KeyButtonView: Back button event: ACTION_DOWN` / `ACTION_UP`. One UI
+ * cancels the back once the button is held for about 600 ms (500 ms still went back,
+ * 650 ms didn't), so a hold is reported at [BACK_HOLD_MS], while the finger is still
+ * down, and releasing afterwards never also goes back. Timing it here, next to the log
+ * reader, keeps binder delays out of the measurement.
  *
  * Shell holds READ_LOGS, so this helper can tail exactly those two tags. It starts
  * reading from "now" so history can never trigger anything, and the app only keeps
@@ -38,6 +48,14 @@ internal class NavLogWatcher {
 
     private var listener: INavGestureListener? = null
     private var process: Process? = null
+
+    private val backTimer = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "coverdeck-backhold").apply { isDaemon = true }
+    }
+
+    /** The pending "still holding Back" check and its press number; guarded by [lock]. */
+    private var backHold: ScheduledFuture<*>? = null
+    private var backPress = 0
 
     private val deathRecipient = IBinder.DeathRecipient {
         // The app died; nobody is left to show recents, so stop reading logs.
@@ -69,6 +87,9 @@ internal class NavLogWatcher {
     private fun stopLocked() {
         val hadListener = listener != null
         generation++
+        backPress++
+        backHold?.cancel(false)
+        backHold = null
         runCatching { listener?.asBinder()?.unlinkToDeath(deathRecipient, 0) }
         listener = null
         runCatching { process?.destroy() }
@@ -130,7 +151,39 @@ internal class NavLogWatcher {
             when {
                 line.contains(LONG_PRESS_MARKER) -> target.onHomeLongPress()
                 line.trimEnd().endsWith(HOME_INJECT_MARKER) -> target.onHomeKey()
+                line.contains(BACK_DOWN_MARKER) -> startBackHold(target)
+                // Up or cancel: either way the hold is over.
+                line.contains(BACK_EVENT_MARKER) -> cancelBackHold()
             }
+        } catch (e: RemoteException) {
+            stop()
+        }
+    }
+
+    private fun startBackHold(target: INavGestureListener) {
+        synchronized(lock) {
+            backHold?.cancel(false)
+            val press = ++backPress
+            backHold = backTimer.schedule({ fireBackHold(target, press) }, BACK_HOLD_MS, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private fun cancelBackHold() {
+        synchronized(lock) {
+            backPress++
+            backHold?.cancel(false)
+            backHold = null
+        }
+    }
+
+    private fun fireBackHold(target: INavGestureListener, press: Int) {
+        synchronized(lock) {
+            // Released, pressed again, stopped, or re-registered in the meantime.
+            if (press != backPress || listener?.asBinder() != target.asBinder()) return
+            backHold = null
+        }
+        try {
+            target.onBackLongPress()
         } catch (e: RemoteException) {
             stop()
         }
@@ -149,5 +202,8 @@ internal class NavLogWatcher {
         // KEYCODE_HOME is 3. Matched at the end of the line, because a plain contains()
         // would also accept key codes 30-39.
         const val HOME_INJECT_MARKER = "injectInputEvent - 3"
+        const val BACK_EVENT_MARKER = "Back button event:"
+        const val BACK_DOWN_MARKER = "Back button event: ACTION_DOWN"
+        const val BACK_HOLD_MS = 700L
     }
 }

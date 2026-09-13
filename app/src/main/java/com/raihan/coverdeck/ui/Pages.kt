@@ -102,6 +102,11 @@ fun RotationPage(model: DeckViewModel) {
 
         Spacer(Modifier.height(12.dp))
 
+        if (isCover) {
+            BackHoldCard(model)
+            Spacer(Modifier.height(10.dp))
+        }
+
         if (isCover && state.autoRotate) {
             AutoRotateCard()
             Spacer(Modifier.height(10.dp))
@@ -142,6 +147,37 @@ fun RotationPage(model: DeckViewModel) {
                     )
                 }
             }
+        }
+    }
+}
+
+/** The "hold Back to switch rotation" switch, shown on the cover's rotation page. */
+@Composable
+private fun BackHoldCard(model: DeckViewModel) {
+    val enabled by model.backLongPressEnabled.collectAsState()
+    val ready = model.privilegedStatus.collectAsState().value is Privileged.Status.Ready
+
+    DeckCard {
+        Column {
+            ToggleRow(
+                label = "Hold Back to switch rotation",
+                description = when {
+                    !ready -> "Needs Shizuku"
+                    enabled -> "On"
+                    else -> "Off"
+                },
+                checked = enabled,
+                onChange = { if (ready) model.setBackLongPress(it) },
+            )
+            Text(
+                "Hold the Back button on the cover screen for a moment to switch between Auto " +
+                    "and locked at 0°. A short confirmation shows on the cover, and a quick tap " +
+                    "on Back still goes back. Works everywhere on the cover while the phone is " +
+                    "folded, and keeps the CoverDeck notification showing.",
+                style = MaterialTheme.typography.bodySmall,
+                color = DeckColors.TextSecondary,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
     }
 }
@@ -582,7 +618,8 @@ fun MirrorPage(model: DeckViewModel) {
                             "that's the only kind of window that can cover the whole cover " +
                             "screen, including its navigation bar and quick panel, and stay " +
                             "visible over Settings. The service is used only to show that " +
-                            "window. It doesn't read the screen or intercept keys.",
+                            "window and CoverDeck's short confirmations. It doesn't read the " +
+                            "screen or intercept keys.",
                         style = MaterialTheme.typography.bodySmall,
                         color = DeckColors.TextSecondary,
                         modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),

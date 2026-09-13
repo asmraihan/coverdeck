@@ -16,8 +16,9 @@ import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.CoverAutoRotator
 import com.raihan.coverdeck.feature.RotationController
 import com.raihan.coverdeck.mirror.MirrorSession
+import com.raihan.coverdeck.nav.BackLongPress
 import com.raihan.coverdeck.nav.HomeLongPress
-import com.raihan.coverdeck.nav.HomeLongPressWatcher
+import com.raihan.coverdeck.nav.NavGestureWatcher
 import com.raihan.coverdeck.privileged.Privileged
 import com.raihan.coverdeck.recents.RecentsPanel
 import kotlinx.coroutines.flow.drop
@@ -25,7 +26,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Hosts the long-running cover features that need no screen of their own: auto-rotate and
- * the Home long-press watcher.
+ * the cover navigation gestures (hold Home for recents, hold Back to switch rotation).
  *
  * Recents (an activity) and the mirror (a helper-owned window) are only launched from its
  * notification. It stops itself as soon as neither hosted feature
@@ -34,7 +35,7 @@ import kotlinx.coroutines.launch
 class CoverDeckService : LifecycleService() {
 
     private var autoRotator: CoverAutoRotator? = null
-    private var homeWatcher: HomeLongPressWatcher? = null
+    private var navWatcher: NavGestureWatcher? = null
 
     private val coverPanel get() = Displays.cover(this)
 
@@ -45,16 +46,16 @@ class CoverDeckService : LifecycleService() {
 
         // Restore whatever was on when the process last died.
         if (AutoRotate.enabled.value) startAutoRotate()
-        if (HomeLongPress.enabled.value) startHomeWatcher()
+        syncNavWatcher()
 
         // Shizuku binds asynchronously and may come up after these features start; the
-        // rotator needs to push its rotation again and the Home watcher needs to register
+        // rotator needs to push its rotation again and the gesture watcher needs to register
         // with what may be a brand-new helper process.
         lifecycleScope.launch {
             Privileged.status.collect { status ->
                 if (status is Privileged.Status.Ready) {
                     autoRotator?.reapply()
-                    homeWatcher?.reconnect()
+                    navWatcher?.reconnect()
                 }
             }
         }
@@ -70,8 +71,7 @@ class CoverDeckService : LifecycleService() {
             ACTION_START_MIRROR -> MirrorSession.start()
             ACTION_AUTO_ROTATE_ON -> startAutoRotate()
             ACTION_AUTO_ROTATE_OFF -> stopAutoRotate()
-            ACTION_HOME_LONGPRESS_ON -> startHomeWatcher()
-            ACTION_HOME_LONGPRESS_OFF -> stopHomeWatcher()
+            ACTION_NAV_GESTURES_CHANGED -> syncNavWatcher()
             ACTION_STOP -> stopEverything()
         }
         stopIfIdle()
@@ -96,17 +96,16 @@ class CoverDeckService : LifecycleService() {
         autoRotator = null
     }
 
-    // ---- Home long-press --------------------------------------------------------
+    // ---- navigation gestures ------------------------------------------------------
 
-    private fun startHomeWatcher() {
-        if (homeWatcher == null) {
-            homeWatcher = HomeLongPressWatcher(this).also { it.start() }
+    /** One watcher serves both gestures; it runs while either is switched on. */
+    private fun syncNavWatcher() {
+        if (HomeLongPress.enabled.value || BackLongPress.enabled.value) {
+            if (navWatcher == null) navWatcher = NavGestureWatcher(this).also { it.start() }
+        } else {
+            navWatcher?.stop()
+            navWatcher = null
         }
-    }
-
-    private fun stopHomeWatcher() {
-        homeWatcher?.stop()
-        homeWatcher = null
     }
 
     // ---- lifecycle ----------------------------------------------------------------
@@ -123,13 +122,14 @@ class CoverDeckService : LifecycleService() {
         }
         stopAutoRotate()
         HomeLongPress.setEnabled(false)
-        stopHomeWatcher()
+        BackLongPress.setEnabled(false)
+        syncNavWatcher()
         stopSelf()
     }
 
     /** Nothing left to host means no reason to hold a foreground notification. */
     private fun stopIfIdle() {
-        if (autoRotator == null && homeWatcher == null) stopSelf()
+        if (autoRotator == null && navWatcher == null) stopSelf()
     }
 
     override fun onDestroy() {
@@ -137,8 +137,8 @@ class CoverDeckService : LifecycleService() {
         // are released here.
         autoRotator?.stop()
         autoRotator = null
-        homeWatcher?.stop()
-        homeWatcher = null
+        navWatcher?.stop()
+        navWatcher = null
         isRunning = false
         super.onDestroy()
     }
@@ -147,7 +147,7 @@ class CoverDeckService : LifecycleService() {
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Cover screen controls", NotificationManager.IMPORTANCE_MIN)
-                .apply { description = "Keeps cover auto-rotate and Home long-press running." },
+                .apply { description = "Keeps cover auto-rotate and the Home and Back hold gestures running." },
         )
 
         fun action(label: String, intentAction: String) = Notification.Action.Builder(
@@ -183,8 +183,8 @@ class CoverDeckService : LifecycleService() {
         const val ACTION_START_MIRROR = "com.raihan.coverdeck.START_MIRROR"
         const val ACTION_AUTO_ROTATE_ON = "com.raihan.coverdeck.AUTO_ROTATE_ON"
         const val ACTION_AUTO_ROTATE_OFF = "com.raihan.coverdeck.AUTO_ROTATE_OFF"
-        const val ACTION_HOME_LONGPRESS_ON = "com.raihan.coverdeck.HOME_LONGPRESS_ON"
-        const val ACTION_HOME_LONGPRESS_OFF = "com.raihan.coverdeck.HOME_LONGPRESS_OFF"
+        /** A navigation gesture was switched on or off; start or stop the watcher to match. */
+        const val ACTION_NAV_GESTURES_CHANGED = "com.raihan.coverdeck.NAV_GESTURES_CHANGED"
         const val ACTION_STOP = "com.raihan.coverdeck.STOP"
 
         @Volatile

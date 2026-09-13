@@ -10,4 +10,7 @@ oneway interface INavGestureListener {
 
     /** SystemUI injected a Home key (a tap, or the start/end of a long press). */
     void onHomeKey();
+
+    /** The cover's Back button has been held past One UI's back-cancel threshold. */
+    void onBackLongPress();
 }

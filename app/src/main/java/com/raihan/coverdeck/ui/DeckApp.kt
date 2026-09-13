@@ -70,6 +70,7 @@ private fun HomeScreen(model: DeckViewModel) {
     val status by model.privilegedStatus.collectAsState()
     val notice by model.notice.collectAsState()
     val navOn by model.homeLongPressEnabled.collectAsState()
+    val backOn by model.backLongPressEnabled.collectAsState()
 
     // Home is about the cover. The inner screen's rotation and density are one level down,
     // on those pages' own Cover/Main switch; the other tiles never depended on it.
@@ -127,6 +128,10 @@ private fun HomeScreen(model: DeckViewModel) {
                     },
                     active = rotation.frozen || rotation.autoRotate,
                     enabled = ready,
+                    // Same pattern as Recents: the pill is the hold gesture (Back here).
+                    trailing = {
+                        TogglePill(checked = backOn, enabled = ready, onToggle = model::setBackLongPress)
+                    },
                     onClick = { model.navigate(DeckRoute.Rotation) },
                 )
             }

@@ -10,6 +10,7 @@ import com.raihan.coverdeck.feature.AutoRotate
 import com.raihan.coverdeck.feature.DensityController
 import com.raihan.coverdeck.feature.RotationController
 import com.raihan.coverdeck.mirror.MirrorSession
+import com.raihan.coverdeck.nav.BackLongPress
 import com.raihan.coverdeck.nav.HomeLongPress
 import com.raihan.coverdeck.overlay.CoverDeckService
 import com.raihan.coverdeck.recents.RecentsPanel
@@ -46,6 +47,9 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The "hold the cover's Home button for recents" switch. */
     val homeLongPressEnabled: StateFlow<Boolean> = HomeLongPress.enabled
+
+    /** The "hold the cover's Back button to switch rotation" switch. */
+    val backLongPressEnabled: StateFlow<Boolean> = BackLongPress.enabled
 
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
@@ -108,16 +112,20 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setHomeLongPress(on: Boolean) {
-        if (on) {
-            // No overlay permission needed any more: recents is an activity, launched by
-            // the Shizuku helper.
-            HomeLongPress.setEnabled(true)
-            CoverDeckService.send(context, CoverDeckService.ACTION_HOME_LONGPRESS_ON)
-        } else {
-            HomeLongPress.setEnabled(false)
-            if (CoverDeckService.isRunning) {
-                CoverDeckService.send(context, CoverDeckService.ACTION_HOME_LONGPRESS_OFF)
-            }
+        // No overlay permission needed: recents is an activity, launched by the Shizuku helper.
+        HomeLongPress.setEnabled(on)
+        syncNavGestures(on)
+    }
+
+    fun setBackLongPress(on: Boolean) {
+        BackLongPress.setEnabled(on)
+        syncNavGestures(on)
+    }
+
+    /** Switching on may need the service started; switching off only matters if it runs. */
+    private fun syncNavGestures(turnedOn: Boolean) {
+        if (turnedOn || CoverDeckService.isRunning) {
+            CoverDeckService.send(context, CoverDeckService.ACTION_NAV_GESTURES_CHANGED)
         }
     }
 
@@ -125,7 +133,7 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     fun previewCoverRecents() = RecentsPanel.show(context)
 
     /**
-     * Brings the service back when a persisted feature (auto-rotate, Home long-press) is
+     * Brings the service back when a persisted feature (auto-rotate, a nav gesture) is
      * on but the process was killed. Called from the foreground activity, where starting a
      * foreground service is always allowed.
      */
@@ -133,7 +141,7 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         if (CoverDeckService.isRunning) return
         val action = when {
             AutoRotate.enabled.value -> CoverDeckService.ACTION_AUTO_ROTATE_ON
-            HomeLongPress.enabled.value -> CoverDeckService.ACTION_HOME_LONGPRESS_ON
+            HomeLongPress.enabled.value || BackLongPress.enabled.value -> CoverDeckService.ACTION_NAV_GESTURES_CHANGED
             else -> return
         }
         runCatching { CoverDeckService.send(context, action) }
