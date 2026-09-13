@@ -1,5 +1,8 @@
 package com.raihan.coverdeck.mirror
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
@@ -9,14 +12,17 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.hardware.display.DisplayManager
 import android.util.Log
 import android.view.Display
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.privileged.Privileged
@@ -41,7 +47,7 @@ internal class MirrorWindow(
     interface Events {
         fun onAreaMeasured(width: Int, height: Int)
         fun onStopRequested()
-        fun onShapeToggleRequested()
+        fun onShapeSelected(shape: MirrorSession.Shape)
         fun onStreamChanged(streaming: Boolean, engine: String)
     }
 
@@ -170,26 +176,91 @@ internal class MirrorWindow(
         private var forwarding = false
         private var lastAreaReported = 0L
 
+        /** The strip button under the finger, or -1. Drawn pressed; acts on release. */
+        private var pressedButton = -1
+
+        /** 0 closed, 1 fully open; animated both ways. */
+        private var menuProgress = 0f
+        private var menuAnimator: ValueAnimator? = null
+
+        /** What a finger went down on inside the menu: 0 or 1 a fit option, 2 stop, -1 nothing. */
+        private var menuPressed = -1
+
         private val buttons = arrayOf(RectF(), RectF(), RectF(), RectF())
         private val menuRect = RectF()
-        private val menuRows = arrayOf(RectF(), RectF(), RectF())
+        private val segmentTrack = RectF()
+        private val segments = arrayOf(RectF(), RectF())
+        private val stopRect = RectF()
+        private val scratch = RectF()
 
         private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(0xE8, 0xED, 0xF5)
+            color = TEXT
             style = Paint.Style.STROKE
             strokeWidth = 2f * density
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
-        private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0xE8, 0xED, 0xF5) }
-        private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0x1B, 0x23, 0x31) }
-        private val scrimPaint = Paint().apply { color = Color.argb(150, 0, 0, 0) }
-        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(0xE8, 0xED, 0xF5)
-            textSize = 15f * density
+        private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT }
+        private val pressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(46, 255, 255, 255) }
+
+        private val scrimPaint = Paint().apply { color = Color.BLACK }
+        private val menuPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0x17, 0x1E, 0x2A)
+            setShadowLayer(20 * density, 0f, 8 * density, Color.argb(140, 0, 0, 0))
         }
-        private val subtlePaint = Paint(textPaint).apply { color = Color.rgb(0x95, 0xA2, 0xB5) }
-        private val dangerPaint = Paint(textPaint).apply { color = Color.rgb(0xFF, 0x6B, 0x6B) }
+        private val menuBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(28, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = density
+        }
+        private val chipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(20, 255, 255, 255) }
+        private val statusDot = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(16, 255, 255, 255) }
+        private val segmentPressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(22, 255, 255, 255) }
+        private val selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(50, Color.red(ACCENT), Color.green(ACCENT), Color.blue(ACCENT))
+        }
+        private val selectedBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(120, Color.red(ACCENT), Color.green(ACCENT), Color.blue(ACCENT))
+            style = Paint.Style.STROKE
+            strokeWidth = density
+        }
+        private val stopPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(34, Color.red(DANGER), Color.green(DANGER), Color.blue(DANGER))
+        }
+        private val stopPressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(64, Color.red(DANGER), Color.green(DANGER), Color.blue(DANGER))
+        }
+        private val glyphStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.6f * density
+            strokeJoin = Paint.Join.ROUND
+        }
+        private val glyphFill = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT
+            textSize = 15f * density
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        private val statusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = SUBTLE
+            textSize = 12f * density
+        }
+        private val optionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = SUBTLE
+            textSize = 12.5f * density
+            textAlign = Paint.Align.CENTER
+        }
+        private val optionSelectedPaint = Paint(optionPaint).apply {
+            color = ACCENT_BRIGHT
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        private val stopTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = DANGER
+            textSize = 14f * density
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
 
         init {
             setBackgroundColor(Color.BLACK)
@@ -374,25 +445,46 @@ internal class MirrorWindow(
         @SuppressLint("ClickableViewAccessibility")
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (menuOpen) {
-                if (event.actionMasked == MotionEvent.ACTION_UP) onMenuTap(event.x, event.y)
+                onMenuTouch(event)
                 return true
             }
-            if (event.actionMasked == MotionEvent.ACTION_DOWN && band.contains(event.x.toInt(), event.y.toInt())) {
+            val x = event.x
+            val y = event.y
+            if (event.actionMasked == MotionEvent.ACTION_DOWN && band.contains(x.toInt(), y.toInt())) {
                 trackingButtons = true
+                pressedButton = buttons.indexOfFirst { it.contains(x, y) }
+                if (pressedButton >= 0) {
+                    // On press, like One UI's own navigation keys.
+                    haptic()
+                    invalidate()
+                }
             }
             if (trackingButtons) {
                 when (event.actionMasked) {
+                    MotionEvent.ACTION_MOVE ->
+                        if (pressedButton >= 0 && !buttons[pressedButton].contains(x, y)) {
+                            pressedButton = -1
+                            invalidate()
+                        }
+
                     MotionEvent.ACTION_UP -> {
+                        val index = pressedButton
                         trackingButtons = false
-                        onButtonTap(event.x, event.y)
+                        pressedButton = -1
+                        invalidate()
+                        if (index >= 0) onButton(index)
                     }
 
-                    MotionEvent.ACTION_CANCEL -> trackingButtons = false
+                    MotionEvent.ACTION_CANCEL -> {
+                        trackingButtons = false
+                        pressedButton = -1
+                        invalidate()
+                    }
                 }
                 return true
             }
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                forwarding = streaming && content.contains(event.x.toInt(), event.y.toInt())
+                forwarding = streaming && content.contains(x.toInt(), y.toInt())
             }
             if (forwarding) forward(event)
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
@@ -418,27 +510,122 @@ internal class MirrorWindow(
             scope.launch(MirrorSession.worker) { Privileged.with { it.injectKey(keyCode, Displays.MAIN_ID) } }
         }
 
-        private fun onButtonTap(x: Float, y: Float) {
-            when (buttons.indexOfFirst { it.contains(x, y) }) {
+        /** Follows the system's touch-feedback setting, as the real navigation bar does. */
+        private fun haptic(type: Int = HapticFeedbackConstants.VIRTUAL_KEY) {
+            performHapticFeedback(type)
+        }
+
+        private fun onButton(index: Int) {
+            when (index) {
                 0 -> sendKey(KeyEvent.KEYCODE_APP_SWITCH)
                 1 -> sendKey(KeyEvent.KEYCODE_HOME)
                 2 -> sendKey(KeyEvent.KEYCODE_BACK)
-                3 -> {
-                    menuOpen = true
+                3 -> openMenu()
+            }
+        }
+
+        // ---- menu -------------------------------------------------------------------
+
+        private fun openMenu() {
+            menuOpen = true
+            menuPressed = -1
+            animateMenu(1f)
+        }
+
+        private fun closeMenu() {
+            menuPressed = -1
+            animateMenu(0f) { menuOpen = false }
+        }
+
+        private fun animateMenu(target: Float, onEnd: (() -> Unit)? = null) {
+            menuAnimator?.cancel()
+            menuAnimator = ValueAnimator.ofFloat(menuProgress, target).apply {
+                duration = if (target > menuProgress) 210L else 150L
+                interpolator = DecelerateInterpolator(2f)
+                addUpdateListener {
+                    menuProgress = it.animatedValue as Float
+                    invalidate()
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    private var cancelled = false
+
+                    override fun onAnimationCancel(animation: Animator) {
+                        cancelled = true
+                    }
+
+                    override fun onAnimationEnd(animation: Animator) {
+                        if (!cancelled) onEnd?.invoke()
+                        invalidate()
+                    }
+                })
+                start()
+            }
+        }
+
+        override fun onDetachedFromWindow() {
+            menuAnimator?.cancel()
+            super.onDetachedFromWindow()
+        }
+
+        private fun menuTarget(x: Float, y: Float): Int = when {
+            segments[0].contains(x, y) -> 0
+            segments[1].contains(x, y) -> 1
+            stopRect.contains(x, y) -> 2
+            else -> -1
+        }
+
+        private fun onMenuTouch(event: MotionEvent) {
+            val x = event.x
+            val y = event.y
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    menuPressed = menuTarget(x, y)
+                    invalidate()
+                }
+
+                MotionEvent.ACTION_MOVE ->
+                    if (menuPressed >= 0 && menuTarget(x, y) != menuPressed) {
+                        menuPressed = -1
+                        invalidate()
+                    }
+
+                MotionEvent.ACTION_UP -> {
+                    val pressed = menuPressed
+                    menuPressed = -1
+                    when {
+                        // A tap outside the panel closes it.
+                        !menuRect.contains(x, y) -> closeMenu()
+                        pressed < 0 || menuTarget(x, y) != pressed -> invalidate()
+                        pressed == 2 -> {
+                            haptic(HapticFeedbackConstants.CONFIRM)
+                            menuAnimator?.cancel()
+                            menuOpen = false
+                            menuProgress = 0f
+                            invalidate()
+                            events.onStopRequested()
+                        }
+
+                        else -> chooseShape(if (pressed == 0) MirrorSession.Shape.COVER else MirrorSession.Shape.ORIGINAL)
+                    }
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    menuPressed = -1
                     invalidate()
                 }
             }
         }
 
-        private fun onMenuTap(x: Float, y: Float) {
-            val row = if (menuRect.contains(x, y)) menuRows.indexOfFirst { it.contains(x, y) } else -1
-            menuOpen = false
-            invalidate()
-            when (row) {
-                0 -> events.onShapeToggleRequested()
-                1 -> events.onStopRequested()
-                // Close, or a tap outside the panel, just closes the menu.
+        /** Shows the new choice highlighted for a moment, then gets out of the way. */
+        private fun chooseShape(shape: MirrorSession.Shape) {
+            if (MirrorSession.state.value.shape == shape) {
+                closeMenu()
+                return
             }
+            haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+            events.onShapeSelected(shape)
+            invalidate()
+            postDelayed({ if (menuOpen) closeMenu() }, 260)
         }
 
         // ---- drawing ----------------------------------------------------------------
@@ -450,6 +637,10 @@ internal class MirrorWindow(
         }
 
         private fun drawButtons(canvas: Canvas) {
+            if (pressedButton >= 0) {
+                val r = buttons[pressedButton]
+                canvas.drawCircle(r.centerX(), r.centerY(), min(r.width(), r.height()) * 0.44f, pressPaint)
+            }
             val s = min(buttons[0].height(), buttons[0].width()) * 0.27f
             buttons[0].let { r ->
                 // Recents: three bars, as on One UI's navigation bar.
@@ -469,36 +660,150 @@ internal class MirrorWindow(
             }
         }
 
-        private fun drawMenu(canvas: Canvas) {
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), scrimPaint)
-            val rowH = 46 * density
-            val w = min(width * 0.8f, 280 * density)
-            val h = rowH * menuRows.size + 16 * density
-            menuRect.set((width - w) / 2, (height - h) / 2, (width + w) / 2, (height + h) / 2)
-            canvas.drawRoundRect(menuRect, 22 * density, 22 * density, panelPaint)
-
-            val shape = MirrorSession.state.value.shape
-            val labels = arrayOf(
-                "Fit: ${shape.label}",
-                "Stop mirroring",
-                "Close",
-            )
-            labels.forEachIndexed { i, label ->
-                val top = menuRect.top + 8 * density + i * rowH
-                menuRows[i].set(menuRect.left, top, menuRect.right, top + rowH)
-                val paint = when (i) {
-                    1 -> dangerPaint
-                    2 -> subtlePaint
-                    else -> textPaint
-                }
-                canvas.drawText(label, menuRect.left + 20 * density, top + rowH / 2 + paint.textSize / 3, paint)
+        /**
+         * Places the menu next to the ⋯ button, towards the middle of the screen, so it opens
+         * from where it was tapped whichever edge the camera strip is on.
+         */
+        private fun layoutMenu() {
+            val margin = 8 * density
+            val w = min(width - 2 * margin, MENU_WIDTH * density)
+            val h = MENU_HEIGHT * density
+            val anchor = buttons[3]
+            val left: Float
+            val top: Float
+            if (band.height() > band.width()) {
+                left = if (anchor.centerX() < width / 2f) anchor.right + margin else anchor.left - margin - w
+                top = anchor.centerY() - h / 2
+            } else {
+                left = anchor.right - w
+                top = if (anchor.centerY() < height / 2f) anchor.bottom + margin else anchor.top - margin - h
             }
+            val l = left.coerceIn(margin, (width - margin - w).coerceAtLeast(margin))
+            val t = top.coerceIn(margin, (height - margin - h).coerceAtLeast(margin))
+            menuRect.set(l, t, l + w, t + h)
+
+            val pad = MENU_PAD * density
+            val trackTop = t + pad + (MENU_HEADER + MENU_GAP) * density
+            segmentTrack.set(l + pad, trackTop, l + w - pad, trackTop + MENU_TRACK * density)
+            val inset = 4 * density
+            segments[0].set(segmentTrack.left + inset, segmentTrack.top + inset, segmentTrack.centerX() - inset / 2, segmentTrack.bottom - inset)
+            segments[1].set(segmentTrack.centerX() + inset / 2, segmentTrack.top + inset, segmentTrack.right - inset, segmentTrack.bottom - inset)
+            val stopTop = segmentTrack.bottom + MENU_GAP * density
+            stopRect.set(l + pad, stopTop, l + w - pad, stopTop + MENU_STOP * density)
         }
+
+        private fun drawMenu(canvas: Canvas) {
+            layoutMenu()
+            val progress = menuProgress
+            scrimPaint.alpha = (110 * progress).toInt()
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), scrimPaint)
+
+            // Fade and grow out of the ⋯ button.
+            val anchor = buttons[3]
+            val pivotX = anchor.centerX().coerceIn(menuRect.left, menuRect.right)
+            val pivotY = anchor.centerY().coerceIn(menuRect.top, menuRect.bottom)
+            val scale = 0.9f + 0.1f * progress
+            scratch.set(menuRect)
+            scratch.inset(-32 * density, -32 * density)
+            val saved = canvas.saveLayerAlpha(scratch, (255 * progress).toInt())
+            canvas.scale(scale, scale, pivotX, pivotY)
+
+            val radius = 24 * density
+            canvas.drawRoundRect(menuRect, radius, radius, menuPaint)
+            canvas.drawRoundRect(menuRect, radius, radius, menuBorder)
+
+            val pad = MENU_PAD * density
+            val state = MirrorSession.state.value
+
+            // Header: title and a live/paused chip.
+            val headerMid = menuRect.top + pad + MENU_HEADER * density / 2
+            canvas.drawText("Mirroring", menuRect.left + pad + 4 * density, baseline(headerMid, titlePaint), titlePaint)
+            val status = if (streaming) "Live" else "Paused"
+            val chipH = 24 * density
+            val chipW = statusPaint.measureText(status) + 30 * density
+            scratch.set(menuRect.right - pad - chipW, headerMid - chipH / 2, menuRect.right - pad, headerMid + chipH / 2)
+            canvas.drawRoundRect(scratch, chipH / 2, chipH / 2, chipPaint)
+            statusDot.color = if (streaming) LIVE else PAUSED
+            canvas.drawCircle(scratch.left + 12 * density, headerMid, 3.5f * density, statusDot)
+            canvas.drawText(status, scratch.left + 21 * density, baseline(headerMid, statusPaint), statusPaint)
+
+            // Fit: two options, the current one highlighted.
+            canvas.drawRoundRect(segmentTrack, 18 * density, 18 * density, trackPaint)
+            val options = arrayOf(MirrorSession.Shape.COVER, MirrorSession.Shape.ORIGINAL)
+            options.forEachIndexed { i, option ->
+                val r = segments[i]
+                val selected = option == state.shape
+                val corner = 14 * density
+                when {
+                    selected -> {
+                        canvas.drawRoundRect(r, corner, corner, selectedPaint)
+                        canvas.drawRoundRect(r, corner, corner, selectedBorder)
+                    }
+
+                    menuPressed == i -> canvas.drawRoundRect(r, corner, corner, segmentPressPaint)
+                }
+                drawShapeGlyph(canvas, option, r.centerX(), r.top + r.height() * 0.36f, selected)
+                canvas.drawText(option.label, r.centerX(), r.top + r.height() * 0.8f, if (selected) optionSelectedPaint else optionPaint)
+            }
+
+            // Stop.
+            val stopCorner = 16 * density
+            canvas.drawRoundRect(stopRect, stopCorner, stopCorner, if (menuPressed == 2) stopPressedPaint else stopPaint)
+            val label = "Stop mirroring"
+            val icon = 11 * density
+            val gap = 9 * density
+            val startX = stopRect.centerX() - (icon + gap + stopTextPaint.measureText(label)) / 2
+            glyphFill.color = DANGER
+            scratch.set(startX, stopRect.centerY() - icon / 2, startX + icon, stopRect.centerY() + icon / 2)
+            canvas.drawRoundRect(scratch, 2.5f * density, 2.5f * density, glyphFill)
+            canvas.drawText(label, startX + icon + gap, baseline(stopRect.centerY(), stopTextPaint), stopTextPaint)
+
+            canvas.restoreToCount(saved)
+        }
+
+        /** A cover-shaped frame, either filled (fit to cover) or with a narrow strip (original). */
+        private fun drawShapeGlyph(canvas: Canvas, shape: MirrorSession.Shape, cx: Float, cy: Float, selected: Boolean) {
+            val color = if (selected) ACCENT_BRIGHT else SUBTLE
+            glyphStroke.color = color
+            val w = 22 * density
+            val h = 18 * density
+            scratch.set(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+            canvas.drawRoundRect(scratch, 4 * density, 4 * density, glyphStroke)
+            val inset = 3.5f * density
+            if (shape == MirrorSession.Shape.COVER) {
+                scratch.inset(inset, inset)
+            } else {
+                scratch.set(cx - 3.5f * density, cy - h / 2 + inset, cx + 3.5f * density, cy + h / 2 - inset)
+            }
+            glyphFill.color = color
+            glyphFill.alpha = if (selected) 220 else 140
+            canvas.drawRoundRect(scratch, 2 * density, 2 * density, glyphFill)
+        }
+
+        private fun baseline(centerY: Float, paint: Paint) = centerY - (paint.descent() + paint.ascent()) / 2
 
         private fun even(value: Float) = (value.toInt().coerceAtLeast(2) / 2) * 2
     }
 
     private companion object {
         const val TAG = "CoverDeck/Mirror"
+
+        // CoverDeck's palette (ui/theme), as plain ints for canvas drawing.
+        val TEXT = Color.rgb(0xE8, 0xED, 0xF5)
+        val SUBTLE = Color.rgb(0x95, 0xA2, 0xB5)
+        val ACCENT = Color.rgb(0x5B, 0x9D, 0xFF)
+        val ACCENT_BRIGHT = Color.rgb(0x8F, 0xBC, 0xFF)
+        val DANGER = Color.rgb(0xFF, 0x6B, 0x6B)
+        val LIVE = Color.rgb(0x4A, 0xDE, 0x80)
+        val PAUSED = Color.rgb(0xF5, 0xB7, 0x4A)
+
+        // Menu geometry, dp.
+        const val MENU_WIDTH = 264f
+        const val MENU_PAD = 14f
+        const val MENU_HEADER = 34f
+        const val MENU_GAP = 10f
+        const val MENU_TRACK = 64f
+        const val MENU_STOP = 44f
+        val MENU_HEIGHT = MENU_PAD + MENU_HEADER + MENU_GAP + MENU_TRACK + MENU_GAP + MENU_STOP + MENU_PAD
     }
 }

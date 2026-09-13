@@ -1,6 +1,5 @@
 package com.raihan.coverdeck.ui
 
-import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,27 +10,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.CastConnected
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,13 +37,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.raihan.coverdeck.feature.AutoRotate
-import com.raihan.coverdeck.feature.DensityController
 import com.raihan.coverdeck.mirror.MirrorHostService
 import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.feature.RotationController
 import com.raihan.coverdeck.privileged.Privileged
 import com.raihan.coverdeck.ui.theme.DeckColors
-import kotlin.math.roundToInt
 
 // =========================================================================
 // Rotation
@@ -55,12 +49,10 @@ import kotlin.math.roundToInt
 
 @Composable
 fun RotationPage(model: DeckViewModel) {
-    val target by model.target.collectAsState()
-    val cover by model.coverPanel.collectAsState()
-    val main by model.mainPanel.collectAsState()
-    val panel = if (target == Target.Cover) cover else main
+    // Cover only. The inner screen is only ever seen through the mirror, and the mirror
+    // holds it upright itself for the whole session.
+    val panel by model.coverPanel.collectAsState()
     val state by model.rotationState(panel.displayId).collectAsState()
-    val isCover = RotationController.isCover(panel.displayId)
     val modes = RotationController.modesFor(panel.displayId)
 
     Column(
@@ -71,17 +63,9 @@ fun RotationPage(model: DeckViewModel) {
     ) {
         DeckHeader(
             title = "Rotation",
-            subtitle = "${panel.name} · display ${panel.displayId}",
+            subtitle = "Cover screen",
             onBack = model::back,
         )
-
-        SegmentedSelector(
-            options = Target.entries.map { it.label },
-            selectedIndex = Target.entries.indexOf(target),
-            modifier = Modifier.fillMaxWidth(),
-            onSelect = { model.setTarget(Target.entries[it]) },
-        )
-        Spacer(Modifier.height(12.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             modes.chunked(3).forEach { row ->
@@ -102,12 +86,10 @@ fun RotationPage(model: DeckViewModel) {
 
         Spacer(Modifier.height(12.dp))
 
-        if (isCover) {
-            BackHoldCard(model)
-            Spacer(Modifier.height(10.dp))
-        }
+        BackHoldCard(model)
+        Spacer(Modifier.height(10.dp))
 
-        if (isCover && state.autoRotate) {
+        if (state.autoRotate) {
             AutoRotateCard()
             Spacer(Modifier.height(10.dp))
         }
@@ -115,7 +97,7 @@ fun RotationPage(model: DeckViewModel) {
         DeckCard {
             Column {
                 // Obeying only means something while CoverDeck is pinning the display.
-                val pinning = state.mode.rotation != null || (isCover && state.mode == RotationController.Mode.AUTO)
+                val pinning = state.mode.rotation != null || state.mode == RotationController.Mode.AUTO
                 if (pinning) {
                     ToggleRow(
                         label = "Force apps to obey",
@@ -131,12 +113,11 @@ fun RotationPage(model: DeckViewModel) {
                     when {
                         state.autoRotate -> "CoverDeck, following the phone"
                         state.frozen -> "CoverDeck, locked"
-                        isCover -> "One UI (Samsung default)"
-                        else -> "One UI auto-rotate"
+                        else -> "One UI (Samsung default)"
                     },
                     tone = if (state.frozen || state.autoRotate) Tone.Active else Tone.Neutral,
                 )
-                if (isCover && state.mode == RotationController.Mode.SYSTEM) {
+                if (state.mode == RotationController.Mode.SYSTEM) {
                     Text(
                         "Samsung's default. The cover home screen and most cover apps force " +
                             "their natural orientation, so the cover usually won't turn. " +
@@ -319,177 +300,6 @@ private fun CalibrationStep(
     }
 }
 
-// =========================================================================
-// Density
-// =========================================================================
-
-@Composable
-fun DensityPage(model: DeckViewModel) {
-    val target by model.target.collectAsState()
-    val cover by model.coverPanel.collectAsState()
-    val main by model.mainPanel.collectAsState()
-    val panel = if (target == Target.Cover) cover else main
-    val state by model.density.state.collectAsState()
-
-    val range = model.density.range(panel)
-    var slider by remember(state.baseDpi, panel.displayId) {
-        mutableFloatStateOf(
-            (if (state.effectiveDpi > 0) state.effectiveDpi else panel.densityDpi).toFloat(),
-        )
-    }
-    val chosen = slider.roundToInt()
-
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-            .verticalScroll(rememberScrollState()),
-    ) {
-        DeckHeader(
-            title = "Density",
-            subtitle = "${panel.name} · applies to every app",
-            onBack = model::back,
-        )
-
-        SegmentedSelector(
-            options = Target.entries.map { it.label },
-            selectedIndex = Target.entries.indexOf(target),
-            modifier = Modifier.fillMaxWidth(),
-            onSelect = { model.setTarget(Target.entries[it]) },
-        )
-        Spacer(Modifier.height(12.dp))
-
-        if (state.awaitingConfirmation) {
-            // The dead-man's switch. If the new density made the screen unreadable,
-            // doing nothing is the safe path and gets the old value back.
-            DeckCard {
-                Column {
-                    Text(
-                        "Keep ${state.pendingDpi} dpi?",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = DeckColors.Warning,
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "Reverting in ${state.secondsLeft}s if you do nothing.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = DeckColors.TextSecondary,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        DeckButton(
-                            text = "Keep",
-                            icon = Icons.Rounded.Check,
-                            tone = Tone.Success,
-                            modifier = Modifier.weight(1f),
-                            onClick = { model.density.confirm(panel.displayId) },
-                        )
-                        DeckButton(
-                            text = "Undo",
-                            icon = Icons.AutoMirrored.Rounded.Undo,
-                            tone = Tone.Danger,
-                            modifier = Modifier.weight(1f),
-                            onClick = { model.density.revert(panel.displayId) },
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        DeckCard {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "$chosen dpi",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = DeckColors.Accent,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "≈ ${model.density.smallestWidthDp(panel, chosen)} dp wide",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = DeckColors.TextTertiary,
-                    )
-                }
-                Slider(
-                    value = slider,
-                    onValueChange = { slider = it },
-                    valueRange = range.first.toFloat()..range.last.toFloat(),
-                    colors = SliderDefaults.colors(
-                        thumbColor = DeckColors.Accent,
-                        activeTrackColor = DeckColors.Accent,
-                        inactiveTrackColor = DeckColors.SurfaceRaised,
-                    ),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val base = if (state.baseDpi > 0) state.baseDpi else panel.densityDpi
-                    listOf(
-                        "More" to (base * 0.75f).roundToInt(),
-                        "Stock" to base,
-                        "Bigger" to (base * 1.2f).roundToInt(),
-                    ).forEach { (label, dpi) ->
-                        DeckButton(
-                            text = label,
-                            filled = false,
-                            tone = Tone.Neutral,
-                            modifier = Modifier.weight(1f),
-                            onClick = { slider = dpi.toFloat() },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                DeckButton(
-                    text = "Apply $chosen dpi",
-                    enabled = chosen != state.effectiveDpi,
-                    onClick = { model.density.apply(panel.displayId, chosen) },
-                )
-                Spacer(Modifier.height(6.dp))
-                // Two distinct undos: back to what *you* had before CoverDeck, or all the
-                // way to the panel's factory value. They differ whenever a density was
-                // already overridden before CoverDeck arrived.
-                val original = state.originalDpi
-                if (original != null && original != state.effectiveDpi) {
-                    DeckButton(
-                        text = "Restore original ($original dpi)",
-                        filled = false,
-                        tone = Tone.Active,
-                        onClick = { model.density.restoreOriginal(panel.displayId) },
-                    )
-                    Spacer(Modifier.height(6.dp))
-                }
-                DeckButton(
-                    text = "Factory density (${state.baseDpi} dpi)",
-                    filled = false,
-                    tone = Tone.Danger,
-                    enabled = state.isModified,
-                    onClick = { model.density.resetToFactory(panel.displayId) },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-        DeckCard {
-            Column {
-                InfoRow("Panel", "${panel.widthPx} × ${panel.heightPx}")
-                InfoRow("Factory density", "${state.baseDpi} dpi")
-                InfoRow(
-                    "Applied",
-                    "${state.effectiveDpi} dpi",
-                    tone = if (state.isModified) Tone.Active else Tone.Neutral,
-                )
-                Text(
-                    "Changing density restarts every app drawing on this screen. " +
-                        "Below about ${DensityController.MIN_DPI + 60} dpi One UI's own panels start to break.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = DeckColors.TextTertiary,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-        }
-    }
-}
-
 @Composable
 private fun ToggleRow(
     label: String,
@@ -664,9 +474,8 @@ fun MirrorPage(model: DeckViewModel) {
                         "as if you were using it, including the inner screen's own navigation " +
                         "bar. The strip beside the cameras has Recents, Home and Back too, and " +
                         "⋯ opens the menu, where you stop mirroring. The cover stays awake " +
-                        "while mirroring; the power button " +
-                        "still turns it off, and the inner panel sleeps with it. The " +
-                        "\"Mirror\" app icon starts it in one tap.",
+                        "while mirroring; the power button still turns it off, and the " +
+                        "inner panel sleeps with it.",
                     style = MaterialTheme.typography.bodySmall,
                     color = DeckColors.TextSecondary,
                     modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),
@@ -723,31 +532,6 @@ fun MirrorPage(model: DeckViewModel) {
                 }
             }
         }
-
-        Spacer(Modifier.height(10.dp))
-        DeckCard {
-            Column {
-                Text(
-                    "Continuity",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = DeckColors.TextPrimary,
-                )
-                Text(
-                    "Or run a single app natively on the cover, with no mirroring: open " +
-                        "recents and tap the app.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = DeckColors.TextSecondary,
-                    modifier = Modifier.padding(top = 3.dp, bottom = 10.dp),
-                )
-                DeckButton(
-                    text = "Open recents",
-                    icon = Icons.AutoMirrored.Rounded.OpenInNew,
-                    filled = false,
-                    enabled = ready,
-                    onClick = model::previewCoverRecents,
-                )
-            }
-        }
     }
 }
 
@@ -763,6 +547,8 @@ private fun SetupPageContent(model: DeckViewModel) {
     val status by model.privilegedStatus.collectAsState()
     val context = LocalContext.current
     val cover by model.coverPanel.collectAsState()
+    val notice by model.notice.collectAsState()
+    var confirmReset by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -839,11 +625,50 @@ private fun SetupPageContent(model: DeckViewModel) {
         Spacer(Modifier.height(10.dp))
         Box(Modifier.fillMaxWidth()) {
             DeckButton(
-                text = "Undo all CoverDeck changes",
+                text = "Reset settings",
                 tone = Tone.Danger,
                 filled = false,
-                onClick = model::resetEverything,
+                onClick = { confirmReset = true },
             )
         }
+        notice?.let {
+            Spacer(Modifier.height(8.dp))
+            NoticeBanner(it) { model.dismissNotice() }
+        }
     }
+
+    if (confirmReset) {
+        ResetConfirmDialog(
+            onConfirm = {
+                confirmReset = false
+                model.resetEverything()
+            },
+            onDismiss = { confirmReset = false },
+        )
+    }
+}
+
+/** Reset touches rotation, mirroring and both gestures at once, so ask first. */
+@Composable
+private fun ResetConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DeckColors.SurfaceRaised,
+        titleContentColor = DeckColors.TextPrimary,
+        textContentColor = DeckColors.TextSecondary,
+        title = { Text("Reset settings?") },
+        text = {
+            Text(
+                "Stops mirroring, turns off cover auto-rotate and the Home and Back hold " +
+                    "gestures, and puts screen rotation back to how it was before CoverDeck " +
+                    "changed it.",
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Reset", color = DeckColors.Danger) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = DeckColors.TextSecondary) }
+        },
+    )
 }

@@ -85,8 +85,8 @@ object MirrorSession {
             scope.launch { end() }
         }
 
-        override fun onShapeToggleRequested() {
-            setShape(if (_state.value.shape == Shape.COVER) Shape.ORIGINAL else Shape.COVER)
+        override fun onShapeSelected(shape: Shape) {
+            setShape(shape)
         }
 
         override fun onStreamChanged(streaming: Boolean, engine: String) {

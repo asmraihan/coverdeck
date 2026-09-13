@@ -5,7 +5,6 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -19,9 +18,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.mirror.MirrorHostService
-import kotlin.math.cos
 import kotlin.math.max
-import kotlin.math.sin
 
 /**
  * A short confirmation pill on the cover screen, over whatever is showing.
@@ -33,7 +30,7 @@ import kotlin.math.sin
  */
 object CoverHud {
 
-    enum class Icon { AUTO_ROTATE, LOCKED }
+    enum class Icon { UNLOCKED, LOCKED }
 
     private const val TAG = "CoverDeck/Hud"
     private const val SHOW_MS = 1_600L
@@ -120,7 +117,7 @@ object CoverHud {
     private class PillView(context: Context) : View(context) {
 
         private val density = resources.displayMetrics.density
-        private var icon = Icon.AUTO_ROTATE
+        private var icon = Icon.UNLOCKED
         private var title = ""
         private var detail = ""
 
@@ -134,23 +131,22 @@ object CoverHud {
         private val glyph = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(0x8F, 0xBC, 0xFF)
             style = Paint.Style.STROKE
-            strokeWidth = 2f * density
+            strokeWidth = 1.7f * density
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
         private val glyphFill = Paint(glyph).apply { style = Paint.Style.FILL }
         private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(0xE8, 0xED, 0xF5)
-            textSize = 15f * density
+            textSize = 13f * density
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
         private val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(0x95, 0xA2, 0xB5)
-            textSize = 12.5f * density
+            textSize = 11f * density
         }
 
         private val rect = RectF()
-        private val path = Path()
 
         fun bind(icon: Icon, title: String, detail: String) {
             this.icon = icon
@@ -177,54 +173,42 @@ object CoverHud {
             val cx = (PAD_START + BADGE / 2) * density
             val cy = h / 2
             canvas.drawCircle(cx, cy, BADGE / 2 * density, badge)
-            when (icon) {
-                Icon.AUTO_ROTATE -> drawAutoRotate(canvas, cx, cy)
-                Icon.LOCKED -> drawLock(canvas, cx, cy)
-            }
+            drawPadlock(canvas, cx, cy, open = icon == Icon.UNLOCKED)
 
             val textX = (PAD_START + BADGE + GAP) * density
-            canvas.drawText(title, textX, cy - 2 * density, titlePaint)
-            canvas.drawText(detail, textX, cy + detailPaint.textSize + 1 * density, detailPaint)
+            canvas.drawText(title, textX, cy - 2.5f * density, titlePaint)
+            canvas.drawText(detail, textX, cy + 10f * density, detailPaint)
         }
 
-        /** A circular arrow. */
-        private fun drawAutoRotate(canvas: Canvas, cx: Float, cy: Float) {
-            val r = 7.5f * density
-            rect.set(cx - r, cy - r, cx + r, cy + r)
-            val start = -60f
-            val sweep = 290f
-            canvas.drawArc(rect, start, sweep, false, glyph)
-            val end = Math.toRadians((start + sweep).toDouble())
-            val tipX = cx + r * cos(end).toFloat()
-            val tipY = cy + r * sin(end).toFloat()
-            val size = 4f * density
-            path.reset()
-            path.moveTo(tipX - size, tipY - size * 0.2f)
-            path.lineTo(tipX, tipY)
-            path.lineTo(tipX + size * 0.2f, tipY - size)
-            canvas.drawPath(path, glyph)
-        }
+        /**
+         * A padlock, closed or open. The open one lifts the left side of the shackle clear
+         * of the body, so the two read as a pair.
+         */
+        private fun drawPadlock(canvas: Canvas, cx: Float, cy: Float, open: Boolean) {
+            val bodyWidth = 11f * density
+            val bodyHeight = 8f * density
+            val bodyTop = cy - 0.5f * density
+            rect.set(cx - bodyWidth / 2, bodyTop, cx + bodyWidth / 2, bodyTop + bodyHeight)
+            canvas.drawRoundRect(rect, 2f * density, 2f * density, glyphFill)
 
-        /** A padlock. */
-        private fun drawLock(canvas: Canvas, cx: Float, cy: Float) {
-            val w = 13f * density
-            val bodyTop = cy - 1f * density
-            rect.set(cx - w / 2, bodyTop, cx + w / 2, bodyTop + 9.5f * density)
-            canvas.drawRoundRect(rect, 2.5f * density, 2.5f * density, glyphFill)
-            val shackle = 4.2f * density
-            rect.set(cx - shackle, bodyTop - 2 * shackle + 1f * density, cx + shackle, bodyTop + 1f * density)
+            val r = 3.4f * density
+            val lift = if (open) 2.2f * density else 0f
+            val legBottom = bodyTop + 0.5f * density
+            val arcCenterY = bodyTop - 3f * density - lift
+            rect.set(cx - r, arcCenterY - r, cx + r, arcCenterY + r)
             canvas.drawArc(rect, 180f, 180f, false, glyph)
-            canvas.drawLine(cx - shackle, bodyTop - shackle + 1f * density, cx - shackle, bodyTop, glyph)
-            canvas.drawLine(cx + shackle, bodyTop - shackle + 1f * density, cx + shackle, bodyTop, glyph)
+            // Right leg always reaches the body; the left one stops short when open.
+            canvas.drawLine(cx + r, arcCenterY, cx + r, legBottom, glyph)
+            canvas.drawLine(cx - r, arcCenterY, cx - r, if (open) arcCenterY + 1.6f * density else legBottom, glyph)
         }
 
         private companion object {
             // dp
-            const val HEIGHT = 56f
-            const val PAD_START = 12f
-            const val BADGE = 34f
-            const val GAP = 11f
-            const val PAD_END = 20f
+            const val HEIGHT = 44f
+            const val PAD_START = 8f
+            const val BADGE = 28f
+            const val GAP = 9f
+            const val PAD_END = 16f
         }
     }
 }

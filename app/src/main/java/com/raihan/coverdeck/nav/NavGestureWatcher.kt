@@ -154,7 +154,7 @@ class NavGestureWatcher(context: Context) {
         buzz()
         // Confirm straight away; the rotation itself follows a moment later.
         if (next == RotationController.Mode.AUTO) {
-            CoverHud.show(appContext, CoverHud.Icon.AUTO_ROTATE, "Auto-rotate on", "Hold Back to lock")
+            CoverHud.show(appContext, CoverHud.Icon.UNLOCKED, "Auto-rotate on", "Hold Back to lock")
         } else {
             CoverHud.show(appContext, CoverHud.Icon.LOCKED, "Rotation locked at 0°", "Hold Back for auto")
         }

@@ -23,9 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -57,7 +55,6 @@ fun DeckApp(model: DeckViewModel) {
         when (route) {
             DeckRoute.Home -> HomeScreen(model)
             DeckRoute.Rotation -> RotationPage(model)
-            DeckRoute.Density -> DensityPage(model)
             DeckRoute.Recents -> RecentsPage(model)
             DeckRoute.Mirror -> MirrorPage(model)
             DeckRoute.Setup -> SetupPage(model)
@@ -72,24 +69,18 @@ private fun HomeScreen(model: DeckViewModel) {
     val navOn by model.homeLongPressEnabled.collectAsState()
     val backOn by model.backLongPressEnabled.collectAsState()
 
-    // Home is about the cover. The inner screen's rotation and density are one level down,
-    // on those pages' own Cover/Main switch; the other tiles never depended on it.
+    // Home is about the cover. The inner screen's rotation is one level down, on the
+    // Rotation page's own Cover/Main switch; the other tiles never depended on it.
     val panel by model.coverPanel.collectAsState()
     val rotation by model.rotationState(panel.displayId).collectAsState()
-    val densityState by model.density.state.collectAsState()
     val mirrorState by MirrorSession.state.collectAsState()
 
     val ready = status is Privileged.Status.Ready
 
-    // Until Shizuku answers, the controller reports 0; show what the panel itself says
-    // rather than a nonsense "0 dpi" (visible in the first on-device screenshot).
-    val shownDpi = densityState.effectiveDpi.takeIf { it > 0 } ?: panel.densityDpi
-    val factoryDpi = densityState.baseDpi.takeIf { it > 0 } ?: panel.densityDpi
-
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
         DeckHeader(
             title = "CoverDeck",
-            subtitle = "${panel.widthPx}×${panel.heightPx} · $shownDpi dpi",
+            subtitle = "${panel.widthPx}×${panel.heightPx} · ${panel.densityDpi} dpi",
             trailing = {
                 StatusChip(
                     text = status.shortLabel(),
@@ -150,25 +141,6 @@ private fun HomeScreen(model: DeckViewModel) {
             }
             item {
                 DeckTile(
-                    icon = Icons.Rounded.FormatSize,
-                    title = "Density",
-                    status = when {
-                        densityState.awaitingConfirmation -> "Confirm ${densityState.secondsLeft}s"
-                        densityState.isModified -> "$shownDpi dpi"
-                        else -> "Stock $factoryDpi dpi"
-                    },
-                    active = densityState.isModified,
-                    tone = when {
-                        densityState.awaitingConfirmation -> Tone.Warning
-                        densityState.isModified -> Tone.Active
-                        else -> Tone.Neutral
-                    },
-                    enabled = ready,
-                    onClick = { model.navigate(DeckRoute.Density) },
-                )
-            }
-            item {
-                DeckTile(
                     icon = Icons.Rounded.Cast,
                     title = "Mirror",
                     status = when {
@@ -181,22 +153,12 @@ private fun HomeScreen(model: DeckViewModel) {
                     onClick = { model.navigate(DeckRoute.Mirror) },
                 )
             }
-            item {
-                DeckTile(
-                    icon = Icons.Rounded.RestartAlt,
-                    title = "Reset all",
-                    status = "Undo CoverDeck changes",
-                    tone = Tone.Danger,
-                    enabled = ready,
-                    onClick = { model.resetEverything() },
-                )
-            }
         }
     }
 }
 
 @Composable
-private fun NoticeBanner(text: String, onDismiss: () -> Unit) {
+internal fun NoticeBanner(text: String, onDismiss: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

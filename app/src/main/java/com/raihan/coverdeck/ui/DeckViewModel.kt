@@ -7,7 +7,6 @@ import androidx.lifecycle.viewModelScope
 import com.raihan.coverdeck.core.Displays
 import com.raihan.coverdeck.core.Panel
 import com.raihan.coverdeck.feature.AutoRotate
-import com.raihan.coverdeck.feature.DensityController
 import com.raihan.coverdeck.feature.RotationController
 import com.raihan.coverdeck.mirror.MirrorSession
 import com.raihan.coverdeck.nav.BackLongPress
@@ -20,24 +19,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-enum class DeckRoute { Home, Rotation, Density, Recents, Mirror, Setup }
+enum class DeckRoute { Home, Rotation, Recents, Mirror, Setup }
 
-/** Which physical panel the rotation and DPI tiles are pointed at. */
-enum class Target(val label: String) { Cover("Cover"), Main("Main") }
-
+/** Which physical panel the Rotation page is pointed at. */
 class DeckViewModel(app: Application) : AndroidViewModel(app) {
 
     private val context: Context get() = getApplication()
-
-    val density = DensityController(context)
 
     val privilegedStatus: StateFlow<Privileged.Status> = Privileged.status
 
     private val _route = MutableStateFlow(DeckRoute.Home)
     val route: StateFlow<DeckRoute> = _route.asStateFlow()
-
-    private val _target = MutableStateFlow(Target.Cover)
-    val target: StateFlow<Target> = _target.asStateFlow()
 
     private val _coverPanel = MutableStateFlow(Displays.cover(context))
     val coverPanel: StateFlow<Panel> = _coverPanel.asStateFlow()
@@ -54,12 +46,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
 
-    val targetDisplayId: Int
-        get() = if (_target.value == Target.Cover) _coverPanel.value.displayId else _mainPanel.value.displayId
-
-    val targetPanel: Panel
-        get() = if (_target.value == Target.Cover) _coverPanel.value else _mainPanel.value
-
     fun rotationState(displayId: Int) = RotationController.state(displayId)
 
     fun navigate(route: DeckRoute) {
@@ -68,13 +54,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
 
     fun back() {
         _route.value = DeckRoute.Home
-        // Home shows the cover's state, so leave an inner-screen selection behind on its page.
-        if (_target.value != Target.Cover) setTarget(Target.Cover)
-    }
-
-    fun setTarget(target: Target) {
-        _target.value = target
-        refreshDisplayState()
     }
 
     fun dismissNotice() {
@@ -91,10 +70,6 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
                 _notice.value = "Restored the inner screen after a mirror session that didn't close cleanly."
             }
         }
-        val strandedDpi = density.recoverUnconfirmed(_coverPanel.value.displayId)
-        if (strandedDpi != null) {
-            _notice.value = "Reverted an unconfirmed ${strandedDpi} dpi change on the cover screen."
-        }
         HomeLongPress.cleanUpLegacyAccessibility(context)
         resumePersistentFeatures()
         refreshDisplayState()
@@ -103,12 +78,12 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshDisplayState() {
         _coverPanel.value = Displays.cover(context)
         _mainPanel.value = Displays.main(context)
-        RotationController.refresh(targetDisplayId)
-        density.refresh(targetDisplayId)
+        RotationController.refresh(_coverPanel.value.displayId)
     }
 
+    /** Cover rotation. The inner screen's is the mirror's business while mirroring. */
     fun applyRotation(mode: RotationController.Mode, forceAppsToObey: Boolean) {
-        RotationController.apply(targetDisplayId, mode, forceAppsToObey)
+        RotationController.apply(_coverPanel.value.displayId, mode, forceAppsToObey)
     }
 
     fun setHomeLongPress(on: Boolean) {
@@ -168,11 +143,10 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         for (panel in panels) {
             val label = if (panel.displayId == _coverPanel.value.displayId) "cover" else "inner"
             if (RotationController.restoreOriginal(panel.displayId)) undone += "$label rotation"
-            if (density.restoreOriginal(panel.displayId)) undone += "$label density"
         }
         refreshDisplayState()
         _notice.value = if (undone.isEmpty()) {
-            "Mirroring and auto-rotate are off. Rotation and density were never changed."
+            "Mirroring and auto-rotate are off. Rotation was never changed."
         } else {
             "Restored ${undone.joinToString()} to how they were before CoverDeck."
         }
