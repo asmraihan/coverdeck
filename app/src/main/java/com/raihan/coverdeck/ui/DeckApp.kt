@@ -145,6 +145,15 @@ private fun HomeScreen(model: DeckViewModel) {
             }
             item {
                 DeckTile(
+                    icon = Icons.Rounded.Timer,
+                    title = "Screen timeout",
+                    status = ScreenTimeout.label(timeout.coverSeconds),
+                    enabled = ready,
+                    onClick = { model.navigate(DeckRoute.Timeout) },
+                )
+            }
+            item {
+                DeckTile(
                     icon = Icons.Rounded.Cast,
                     title = "Mirror",
                     status = when {
@@ -155,15 +164,6 @@ private fun HomeScreen(model: DeckViewModel) {
                     active = mirrorState.active,
                     enabled = ready,
                     onClick = { model.navigate(DeckRoute.Mirror) },
-                )
-            }
-            item {
-                DeckTile(
-                    icon = Icons.Rounded.Timer,
-                    title = "Screen timeout",
-                    status = ScreenTimeout.label(timeout.coverSeconds),
-                    enabled = ready,
-                    onClick = { model.navigate(DeckRoute.Timeout) },
                 )
             }
         }
