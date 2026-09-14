@@ -140,6 +140,9 @@ object RotationController {
             autoRotate = autoOnCover,
         )
         refresh(displayId)
+        // The display turns a moment after the lock, so the refresh can still read the old
+        // angle and report the previous lock. Keep the mode that was just applied.
+        flowFor(displayId).value = flowFor(displayId).value.copy(mode = mode)
     }
 
     private fun setCoverAutoRotate(on: Boolean) {

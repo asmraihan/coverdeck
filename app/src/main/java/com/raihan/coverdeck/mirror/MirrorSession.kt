@@ -7,6 +7,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Surface
 import com.raihan.coverdeck.core.Displays
+import com.raihan.coverdeck.feature.RotationController
 import com.raihan.coverdeck.privileged.Privileged
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -107,6 +108,10 @@ object MirrorSession {
 
         override fun onInnerOffSelected(off: Boolean) {
             setInnerOff(off)
+        }
+
+        override fun onRotationCycleRequested() {
+            cycleCoverRotation()
         }
 
         override fun onStreamChanged(streaming: Boolean, engine: String) {
@@ -219,6 +224,38 @@ object MirrorSession {
         prefs?.edit()?.putBoolean(KEY_HIDE_NAV, hide)?.apply()
         _state.update { it.copy(hideNavBar = hide) }
         if (_state.value.active) scope.launch { applyShape() }
+    }
+
+    /** The cover rotation the menu offers, in the order a tap steps through them. */
+    private val coverRotationCycle = listOf(
+        RotationController.Mode.AUTO,
+        RotationController.Mode.DEG_0,
+        RotationController.Mode.DEG_90,
+    )
+
+    /** Auto, then locked at 0°, then locked at 90°, then Auto again. Anything else goes to Auto. */
+    fun cycleCoverRotation() {
+        val ctx = appContext ?: return
+        val cover = Displays.cover(ctx).displayId
+        scope.launch {
+            // No refresh here: the menu refreshed when it opened, and a refresh straight after
+            // a quick second tap could still read the angle the display is turning away from.
+            val state = RotationController.state(cover).value
+            val index = coverRotationCycle.indexOf(state.mode)
+            val next = if (index < 0) RotationController.Mode.AUTO else coverRotationCycle[(index + 1) % coverRotationCycle.size]
+            RotationController.apply(cover, next, state.forceAppsToObey)
+            withContext(Dispatchers.Main) { window?.refreshMenu() }
+            Log.i(TAG, "cover rotation from the menu: ${state.mode} -> $next")
+        }
+    }
+
+    /** Brings the menu's rotation toggle up to date, e.g. when the menu opens. */
+    internal fun refreshCoverRotation() {
+        val ctx = appContext ?: return
+        scope.launch {
+            RotationController.refresh(Displays.cover(ctx).displayId)
+            withContext(Dispatchers.Main) { window?.refreshMenu() }
+        }
     }
 
     fun setShape(shape: Shape) {

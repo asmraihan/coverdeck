@@ -29,6 +29,7 @@ import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import androidx.core.graphics.ColorUtils
 import com.raihan.coverdeck.core.Displays
+import com.raihan.coverdeck.feature.RotationController
 import com.raihan.coverdeck.privileged.Privileged
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +55,7 @@ internal class MirrorWindow(
         fun onShapeSelected(shape: MirrorSession.Shape)
         fun onHideNavBarSelected(hide: Boolean)
         fun onInnerOffSelected(off: Boolean)
+        fun onRotationCycleRequested()
         fun onStreamChanged(streaming: Boolean, engine: String)
     }
 
@@ -145,6 +147,11 @@ internal class MirrorWindow(
             Log.e(TAG, "could not add the mirror window", t)
             false
         }
+    }
+
+    /** Redraws the menu, e.g. after the cover rotation changed. */
+    fun refreshMenu() {
+        view?.invalidate()
     }
 
     /** [cropBottom] source pixels at the bottom (the navigation bar) are kept out of view. */
@@ -254,7 +261,7 @@ internal class MirrorWindow(
         }
         private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = TEXT
-            textSize = 10.5f * density
+            textSize = 10f * density
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create(Typeface.DEFAULT, 500, false)
         }
@@ -544,6 +551,7 @@ internal class MirrorWindow(
             menuPressed = -1
             syncToggles(animate = false)
             animateMenu(1f, OPEN_MS, OPEN_EASE)
+            MirrorSession.refreshCoverRotation()
         }
 
         private fun closeMenu() {
@@ -582,12 +590,27 @@ internal class MirrorWindow(
             super.onDetachedFromWindow()
         }
 
+        private fun coverRotationMode(): RotationController.Mode =
+            RotationController.state(coverDisplayId).value.mode
+
         private fun toggleOn(index: Int): Boolean {
             val state = MirrorSession.state.value
             return when (index) {
-                0 -> state.shape == MirrorSession.Shape.COVER
-                1 -> state.hideNavBar
-                else -> state.innerOff
+                TOGGLE_FIT -> state.shape == MirrorSession.Shape.COVER
+                TOGGLE_NAV -> state.hideNavBar
+                TOGGLE_INNER_OFF -> state.innerOff
+                else -> coverRotationMode() == RotationController.Mode.AUTO
+            }
+        }
+
+        private fun toggleLabel(index: Int): String = when (index) {
+            TOGGLE_FIT -> "Fit to cover"
+            TOGGLE_NAV -> "Hide nav bar"
+            TOGGLE_INNER_OFF -> "Inner screen off"
+            else -> when (val mode = coverRotationMode()) {
+                RotationController.Mode.AUTO -> "Auto rotate"
+                RotationController.Mode.SYSTEM -> "Rotation"
+                else -> "Locked ${mode.label}"
             }
         }
 
@@ -664,9 +687,10 @@ internal class MirrorWindow(
             haptic(HapticFeedbackConstants.KEYBOARD_TAP)
             val on = toggleOn(index)
             when (index) {
-                0 -> events.onShapeSelected(if (on) MirrorSession.Shape.ORIGINAL else MirrorSession.Shape.COVER)
-                1 -> events.onHideNavBarSelected(!on)
-                else -> events.onInnerOffSelected(!on)
+                TOGGLE_FIT -> events.onShapeSelected(if (on) MirrorSession.Shape.ORIGINAL else MirrorSession.Shape.COVER)
+                TOGGLE_NAV -> events.onHideNavBarSelected(!on)
+                TOGGLE_INNER_OFF -> events.onInnerOffSelected(!on)
+                else -> events.onRotationCycleRequested()
             }
             syncToggles(animate = true)
             invalidate()
@@ -790,7 +814,7 @@ internal class MirrorWindow(
                 canvas.drawCircle(cx, cy, circleRadius * (if (pressed) 0.92f else 1f), circlePaint)
                 if (pressed) canvas.drawCircle(cx, cy, circleRadius * 0.92f, pressPaint)
                 drawToggleIcon(canvas, i, cx, cy, ColorUtils.blendARGB(ICON_OFF, Color.WHITE, on))
-                drawLabel(canvas, TOGGLE_LABELS[i], cx, cy + circleRadius + 6 * density, cell.width() - 8 * density)
+                drawLabel(canvas, toggleLabel(i), cx, cy + circleRadius + 6 * density, cell.width() - 4 * density)
             }
 
             // Stop: One UI's destructive button, a neutral pill with red text.
@@ -834,7 +858,7 @@ internal class MirrorWindow(
             glyphStroke.color = color
             glyphStroke.strokeWidth = stroke
             when (index) {
-                0 -> {
+                TOGGLE_FIT -> {
                     // Fit to cover: the four corners of a frame.
                     val hx = 8.5f * density
                     val hy = 7f * density
@@ -850,7 +874,7 @@ internal class MirrorWindow(
                     canvas.drawPath(path, glyphStroke)
                 }
 
-                1 -> {
+                TOGGLE_NAV -> {
                     // Hide nav bar: a phone whose bottom bar is dotted away.
                     val hw = 6f * density
                     val hh = 8.5f * density
@@ -859,6 +883,40 @@ internal class MirrorWindow(
                     val barY = cy + hh - 3.6f * density
                     glyphFill.color = color
                     for (k in -1..1) canvas.drawCircle(cx + k * 2.6f * density, barY, 0.9f * density, glyphFill)
+                }
+
+                TOGGLE_ROTATION -> {
+                    if (coverRotationMode() == RotationController.Mode.AUTO) {
+                        // Auto rotate: two arrows chasing each other round.
+                        val r = 7f * density
+                        scratch.set(cx - r, cy - r, cx + r, cy + r)
+                        val head = 3f * density
+                        for (start in floatArrayOf(-60f, 120f)) {
+                            canvas.drawArc(scratch, start, 110f, false, glyphStroke)
+                            val end = Math.toRadians((start + 110f).toDouble())
+                            val tipX = cx + r * Math.cos(end).toFloat()
+                            val tipY = cy + r * Math.sin(end).toFloat()
+                            // Arrowhead pointing along the arc's direction of travel.
+                            val along = end + Math.PI / 2
+                            val back = along + Math.PI
+                            canvas.drawLine(tipX, tipY, tipX + head * Math.cos(back - 0.5).toFloat(), tipY + head * Math.sin(back - 0.5).toFloat(), glyphStroke)
+                            canvas.drawLine(tipX, tipY, tipX + head * Math.cos(back + 0.5).toFloat(), tipY + head * Math.sin(back + 0.5).toFloat(), glyphStroke)
+                        }
+                    } else {
+                        // Locked: a padlock.
+                        val bodyW = 11f * density
+                        val bodyH = 8f * density
+                        val bodyTop = cy - 1f * density
+                        glyphFill.color = color
+                        scratch.set(cx - bodyW / 2, bodyTop, cx + bodyW / 2, bodyTop + bodyH)
+                        canvas.drawRoundRect(scratch, 2f * density, 2f * density, glyphFill)
+                        val sr = 3.4f * density
+                        val arcY = bodyTop - 2.6f * density
+                        scratch.set(cx - sr, arcY - sr, cx + sr, arcY + sr)
+                        canvas.drawArc(scratch, 180f, 180f, false, glyphStroke)
+                        canvas.drawLine(cx - sr, arcY, cx - sr, bodyTop + 0.5f * density, glyphStroke)
+                        canvas.drawLine(cx + sr, arcY, cx + sr, bodyTop + 0.5f * density, glyphStroke)
+                    }
                 }
 
                 else -> {
@@ -911,7 +969,7 @@ internal class MirrorWindow(
         val ICON_OFF = Color.rgb(0xEE, 0xF2, 0xF8)
 
         // Menu geometry, dp.
-        const val MENU_WIDTH = 232f
+        const val MENU_WIDTH = 264f
         const val MENU_RADIUS = 24f
         const val MENU_PAD = 14f
         const val MENU_HEADER = 36f
@@ -919,12 +977,15 @@ internal class MirrorWindow(
         const val MENU_TOGGLES = 76f
         const val MENU_GAP = 10f
         const val MENU_STOP = 40f
-        const val TOGGLE_CIRCLE = 44f
+        const val TOGGLE_CIRCLE = 42f
         val MENU_HEIGHT = MENU_PAD + MENU_HEADER + MENU_HEADER_GAP + MENU_TOGGLES + MENU_GAP + MENU_STOP + MENU_PAD
 
-        const val TOGGLE_COUNT = 3
-        const val STOP = 3
-        val TOGGLE_LABELS = arrayOf("Fit to cover", "Hide nav bar", "Inner screen off")
+        const val TOGGLE_FIT = 0
+        const val TOGGLE_NAV = 1
+        const val TOGGLE_INNER_OFF = 2
+        const val TOGGLE_ROTATION = 3
+        const val TOGGLE_COUNT = 4
+        const val STOP = TOGGLE_COUNT
         val CLEAR = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
 
         // Motion, close to One UI's easing: quick to start, long gentle settle.

@@ -9,6 +9,7 @@ import android.hardware.SensorManager
 import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.OrientationEventListener
@@ -162,6 +163,11 @@ class CoverAutoRotator(
     private var lastApplied: Int? = null
     private var pendingTarget: Int? = null
 
+    /** The orientation sensor's last value as it arrived, before [coverFrame], and when. */
+    private var lastSensorValue = -1
+    private var lastSensorAt = 0L
+    private var innerOn = false
+
     // ---- sensor sources ---------------------------------------------------
 
     /**
@@ -175,7 +181,10 @@ class CoverAutoRotator(
     private val orientationListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
             val raw = event.values.firstOrNull()?.toInt() ?: return
-            if (raw in 0..3) onReading(raw)
+            if (raw !in 0..3) return
+            lastSensorValue = raw
+            lastSensorAt = SystemClock.uptimeMillis()
+            onReading(coverFrame(raw))
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -209,14 +218,19 @@ class CoverAutoRotator(
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayChanged(id: Int) {
             if (id == displayId) syncListening()
+            if (id == Display.DEFAULT_DISPLAY) onInnerScreenChanged()
         }
 
+        // Folded, the inner display is disabled rather than just off, so it can come and go
+        // as a whole display too.
         override fun onDisplayAdded(id: Int) {
             if (id == displayId) syncListening()
+            if (id == Display.DEFAULT_DISPLAY) onInnerScreenChanged()
         }
 
         override fun onDisplayRemoved(id: Int) {
             if (id == displayId) syncListening()
+            if (id == Display.DEFAULT_DISPLAY) onInnerScreenChanged()
         }
     }
 
@@ -225,6 +239,7 @@ class CoverAutoRotator(
     fun start() {
         if (running) return
         running = true
+        innerOn = innerScreenOn()
         displayManager?.registerDisplayListener(displayListener, handler)
         syncListening()
     }
@@ -288,6 +303,37 @@ class CoverAutoRotator(
         AutoRotate.publishSource(if (running) "paused (cover off)" else "stopped")
     }
 
+    // ---- sensor frame -----------------------------------------------------------
+
+    /**
+     * Samsung's orientation sensor answers for whichever screen is the phone's main one.
+     * Folded with only the cover on, that is the cover. While CoverDeck mirrors, both
+     * screens are on and it answers for the inner screen instead. Folded, the inner screen
+     * sits flipped over the hinge behind the cover, so upright and upside down trade places
+     * while sideways stays sideways: mirroring used to turn a 0° cover to 180° and back.
+     * Readings are put back into the cover's frame as they arrive.
+     */
+    private fun coverFrame(raw: Int): Int =
+        if (innerOn && (raw == Surface.ROTATION_0 || raw == Surface.ROTATION_180)) (raw + 2) % 4 else raw
+
+    private fun innerScreenOn(): Boolean =
+        displayManager?.getDisplay(Display.DEFAULT_DISPLAY)?.state == Display.STATE_ON
+
+    /**
+     * The sensor switches screens together with the device state, and its first reading in
+     * the new frame can arrive just before the display reports the change. A reading that
+     * recent is taken again in the new frame; later readings arrive in it anyway.
+     */
+    private fun onInnerScreenChanged() {
+        val on = innerScreenOn()
+        if (on == innerOn) return
+        innerOn = on
+        if (!listening || lastSensorValue < 0) return
+        if (SystemClock.uptimeMillis() - lastSensorAt <= FRAME_SWITCH_WINDOW_MS) {
+            onReading(coverFrame(lastSensorValue))
+        }
+    }
+
     // ---- decision -------------------------------------------------------------
 
     private fun onReading(raw: Int) {
@@ -325,5 +371,6 @@ class CoverAutoRotator(
         const val TYPE_DEVICE_ORIENTATION = 27
         const val SETTLE_MS = 250L
         const val HYSTERESIS_DEGREES = 30
+        const val FRAME_SWITCH_WINDOW_MS = 1_000L
     }
 }
